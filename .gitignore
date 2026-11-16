@@ -1,16 +1,31 @@
+# Local configuration (copy config.example.yaml to config.yaml)
 config.yaml
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 .env
 *.egg-info/
-dist/
-build/
+.pytest_cache/
 .venv/
 venv/
-node_modules/
+
+# Server data (keyword index, content hashes)
+data/
+
+# Build output
+dist/
+build/
 *.xpi
-qdrant_data/
+
+# Upstream leftovers
 state.json
+qdrant_data/
+
+# Node
+node_modules/
+
+# Editors / agents
 .claude/
 CLAUDE.md

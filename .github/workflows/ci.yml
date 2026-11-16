@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements.txt -r server/requirements-dev.txt
+
+      - name: Run server tests
+        run: python -m pytest server/tests -q
+
+  build-addon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read addon version
+        id: meta
+        run: |
+          version=$(jq -r '.version' addon/manifest.json)
+          short_sha=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "xpi_name=thunderbird-ai-omnisearch-${version}-${short_sha}.xpi" >> "$GITHUB_OUTPUT"
+
+      - name: Syntax-check all add-on JavaScript
+        run: |
+          status=0
+          while IFS= read -r -d '' f; do
+            node --check "$f" || status=1
+          done < <(find addon -name '*.js' -print0)
+          exit $status
+
+      - name: Build .xpi
+        run: |
+          cd addon
+          zip -r "../${{ steps.meta.outputs.xpi_name }}" . -x "*.DS_Store"
+          cd ..
+          ls -la "${{ steps.meta.outputs.xpi_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.xpi_name }}
+          path: ${{ steps.meta.outputs.xpi_name }}
+          if-no-files-found: error
