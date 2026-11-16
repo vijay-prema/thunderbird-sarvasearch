@@ -1,11 +1,14 @@
-"""Entry point for Thunderbird AI Search server."""
+"""Entry point for Thunderbird AI OmniSearch server.
+
+No scheduler, no IMAP: mail arrives when the Thunderbird add-on pushes it
+(via /ingest). Bring your own Ollama and Qdrant — they are expected to be
+running already (docker or native).
+"""
 
 import asyncio
 import logging
+import os
 import sys
-import threading
-import time
-from contextlib import asynccontextmanager
 
 import uvicorn
 
@@ -13,27 +16,50 @@ from server import __version__
 from server.api import create_app
 from server.config import load_config
 from server.embeddings import OllamaEmbedding
-from server.indexer import EmailIndexer
+from server.ingest import IngestService
+from server.search import SearchService
+from server.store import DocStore
 from server.vector_store import VectorStore
 
 logger = logging.getLogger("server")
 
-CONFIG_PATH = "/app/config.yaml"
+
+def _config_path() -> str:
+    env = os.environ.get("TAIS_CONFIG")
+    if env:
+        return env
+    if os.path.exists("/app/config.yaml"):  # docker default
+        return "/app/config.yaml"
+    return "config.yaml"
+
+
+def _detect_dimensions(embedder: OllamaEmbedding) -> int:
+    """Known dims, or a one-off probe embedding to detect them."""
+    try:
+        return embedder.dimensions
+    except RuntimeError:
+        pass
+    logger.info("Unknown embedding model dims, probing Ollama...")
+    vectors = asyncio.run(embedder.embed(["dimension probe"]))
+    for v in vectors:
+        if v is not None:
+            logger.info("Detected embedding dimensions: %d", len(v))
+            return len(v)
+    raise RuntimeError(
+        "Could not detect embedding dimensions: Ollama returned no vector. "
+        "Is the model pulled?"
+    )
 
 
 def main():
-    config = load_config(CONFIG_PATH)
+    config = load_config(_config_path())
 
     logging.basicConfig(
         level=getattr(logging, config.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
 
-    logger.info("Thunderbird AI Search server v%s starting", __version__)
-
-    if not config.accounts:
-        logger.error("No IMAP accounts configured. Add at least one account to config.yaml")
-        sys.exit(1)
+    logger.info("Thunderbird AI OmniSearch server v%s starting", __version__)
 
     embedder = OllamaEmbedding(
         base_url=config.ollama.base_url,
@@ -47,89 +73,32 @@ def main():
     if not store.is_healthy():
         logger.error("Cannot connect to Qdrant at %s", config.qdrant.url)
         sys.exit(1)
-    logger.info("Qdrant connection OK")
+    logger.info("Qdrant connection OK (%s)", config.qdrant.url)
 
-    store.ensure_collection(dimensions=embedder.dimensions)
+    try:
+        dimensions = _detect_dimensions(embedder)
+        logger.info("Ollama connection OK (%s)", config.ollama.model)
+    except Exception as e:
+        logger.error("Cannot reach Ollama at %s: %s", config.ollama.base_url, e)
+        logger.warning(
+            "Server will start, but semantic search and embedding will fail "
+            "until Ollama is available. Keyword search still works."
+        )
+        dimensions = 768  # nomic-embed-text default; collection only created later
 
-    indexer = EmailIndexer(config, embedder, store)
+    store.ensure_collection(dimensions=dimensions)
 
-    @asynccontextmanager
-    async def lifespan(app):
-        loop = asyncio.get_event_loop()
-        try:
-            await embedder.embed(["startup check"])
-            logger.info("Ollama connection OK (%s)", config.ollama.model)
-        except Exception as e:
-            logger.error("Cannot connect to Ollama at %s: %s", config.ollama.base_url, e)
-            logger.warning("Server will start but indexing will fail until Ollama is available")
+    docstore = DocStore(config.database.path)
+    ingest_service = IngestService(config, embedder, store, docstore, dimensions=dimensions)
+    search_service = SearchService(config, embedder, store, docstore)
 
-        thread = threading.Thread(target=_schedule_loop, args=(loop,), daemon=True)
-        thread.start()
-
-        yield
-
-        await embedder.close()
-
-    app = create_app(lifespan=lifespan)
+    app = create_app()
     app.state.config = config
     app.state.embedder = embedder
     app.state.store = store
-    app.state.indexer = indexer
-
-    def _schedule_loop(loop: asyncio.AbstractEventLoop):
-        # Adaptive backoff state. Persisted to state.json so a docker restart
-        # doesn't reset us to 0 and have us hammer Gmail at base cadence while
-        # cycles are still failing. (Cleared as soon as a cycle completes cleanly.)
-        sched_state = indexer.get_scheduler_persisted_state()
-        consecutive_rate_aborts = int(sched_state.get("consecutive_rate_limit_aborts", 0))
-        if consecutive_rate_aborts > 0:
-            logger.info(
-                "Restored adaptive-backoff state from state.json: "
-                "%d consecutive rate-limited cycles",
-                consecutive_rate_aborts,
-            )
-        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-
-        while True:
-            try:
-                indexer.run_full_index(loop)
-            except Exception as e:
-                logger.error("Indexer run failed: %s", e)
-            if config.indexer.schedule_minutes <= 0:
-                break
-
-            # Adaptive-backoff: if the last cycle hit rate_limit, sleep longer
-            # before the next attempt. Reset to 1× as soon as a cycle completes
-            # cleanly. Capped at rate_limit_max_backoff_minutes.
-            base = config.indexer.schedule_minutes
-            factor = config.indexer.rate_limit_backoff_factor
-            max_min = config.indexer.rate_limit_max_backoff_minutes
-
-            if indexer.last_cycle_was_rate_limited() and factor > 1.0:
-                consecutive_rate_aborts += 1
-                multiplier = factor ** consecutive_rate_aborts
-                sleep_min = min(base * multiplier, max_min)
-                logger.warning(
-                    "Rate-limited %d cycle(s) in a row. Backing off, next cycle in %.1f min (%.1fx base)",
-                    consecutive_rate_aborts, sleep_min, sleep_min / base,
-                )
-            else:
-                if consecutive_rate_aborts > 0:
-                    logger.info("Cycle completed cleanly. Resetting rate-limit backoff to 1x")
-                consecutive_rate_aborts = 0
-                multiplier = 1.0
-                sleep_min = base
-
-            # Surface backoff state on /indexer/status so the dashboard can
-            # show "Next run: X (backoff Yx after Z aborts)".
-            next_run = (_dt.now(_tz.utc) + _td(minutes=sleep_min)).isoformat()
-            indexer.status.set_backoff_state(multiplier, consecutive_rate_aborts, next_run)
-            # Persist so backoff survives container restarts
-            indexer.save_scheduler_persisted_state({
-                "consecutive_rate_limit_aborts": consecutive_rate_aborts,
-            })
-
-            time.sleep(sleep_min * 60)
+    app.state.docstore = docstore
+    app.state.ingest_service = ingest_service
+    app.state.search_service = search_service
 
     uvicorn.run(
         app,
