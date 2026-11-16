@@ -153,3 +153,67 @@ def test_clear(tmp_path):
     _put(store, "m1")
     store.clear()
     assert store.count() == 0
+
+
+def test_attachments_roundtrip_and_preserve(tmp_path):
+    store = DocStore(str(tmp_path / "s.db"))
+    _put(store, "m1")
+    store.set_attachments("account1", "m1", ["a.pdf", "b.xlsx"])
+    row = store.get("account1", "m1")
+    assert row is not None
+    assert json.loads(row["attachments"]) == ["a.pdf", "b.xlsx"]
+    # A re-upsert that says nothing about attachments keeps them.
+    _put(store, "m1")
+    row = store.get("account1", "m1")
+    assert row is not None
+    assert json.loads(row["attachments"]) == ["a.pdf", "b.xlsx"]
+    # An explicit empty list replaces them.
+    store.set_attachments("account1", "m1", [])
+    row = store.get("account1", "m1")
+    assert row is not None
+    assert json.loads(row["attachments"]) == []
+
+
+def test_migrates_a_database_from_before_attachments(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    # The pre-attachments schema, with one row already in it.
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE docs (
+            rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            subject TEXT NOT NULL DEFAULT '',
+            from_addr TEXT NOT NULL DEFAULT '',
+            to_addr TEXT NOT NULL DEFAULT '',
+            date TEXT NOT NULL DEFAULT '',
+            date_ms INTEGER NOT NULL DEFAULT 0,
+            account_name TEXT NOT NULL DEFAULT '',
+            folders TEXT NOT NULL DEFAULT '[]',
+            snippet TEXT NOT NULL DEFAULT '',
+            header_only INTEGER NOT NULL DEFAULT 0,
+            encrypted INTEGER NOT NULL DEFAULT 0,
+            numeric_id INTEGER,
+            indexed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            UNIQUE(account_id, message_id)
+        );
+        INSERT INTO docs (account_id, message_id, content_hash, subject)
+        VALUES ('account1', 'old@x.com', 'h', 'Old message');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = DocStore(path)  # opening adds the column
+    row = store.get("account1", "old@x.com")
+    assert row is not None
+    assert row["subject"] == "Old message"
+    assert json.loads(row["attachments"]) == []
+    store.set_attachments("account1", "old@x.com", ["archived.pdf"])
+    row = store.get("account1", "old@x.com")
+    assert row is not None
+    assert json.loads(row["attachments"]) == ["archived.pdf"]

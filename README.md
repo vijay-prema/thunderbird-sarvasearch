@@ -118,6 +118,11 @@ anything whose content already matches — no re-embedding, no duplicate vectors
 A message in several folders (Gmail labels, copies) is **one** record listing all
 its folders; it disappears only when the last folder goes.
 
+One message the store rejects (a payload Qdrant or SQLite will not take) is
+logged with its account and Message-ID and skipped, so it cannot abort a
+100k-message run that would restart at the same message every time; the next
+pass retries it, and the rebuild toast reports how many were skipped.
+
 ## Search modes & filters
 
 | Mode | Engine | Notes |
@@ -126,9 +131,17 @@ its folders; it disappears only when the last folder goes.
 | Semantic | Ollama embeddings + Qdrant cosine | meaning over exact words |
 | Keyword | SQLite FTS5, bm25 with column weights (subject 8 : from 4 : to 2 : body 1) | prefix matching; no Ollama needed |
 
-Filters on any mode: account dropdown, sender-contains, and an after/before date
-range. If Ollama is down, hybrid silently degrades to keyword-only and says so in
-the status line.
+Filters on any mode: account dropdown, sender-contains, a quick date range
+(*Any time, Last 7/30/60 days, This week, This month, Last month, This year*,
+or custom) and an after/before date range. The quick ranges just fill the two
+date inputs, so you can see and adjust the exact window they applied. If Ollama
+is down, hybrid silently degrades to keyword-only and says so in the status line.
+
+Result cards also list the message's **attachment file names** (the first three,
+then `+N more`, with the rest in the tooltip). Names are captured at index time;
+mail indexed before v2.4 shows them after one **Rebuild index** — attachment
+names are not part of the embedded text, so a rebuild backfills (and corrects)
+them without re-embedding anything.
 
 ## Server API
 
@@ -174,7 +187,7 @@ and rebuilding.
 ```bash
 python -m venv .venv
 .venv/bin/pip install -r server/requirements.txt -r server/requirements-dev.txt
-.venv/bin/python -m pytest server/tests -q   # 53 tests, no external services needed
+.venv/bin/python -m pytest server/tests -q   # full suite, no external services needed
 ./build.sh --dev                              # development .xpi with branch+sha
 ```
 

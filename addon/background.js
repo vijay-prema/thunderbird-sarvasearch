@@ -100,44 +100,70 @@
 
   // ---- Toolbar button badge: indexing progress at a glance ----
   // The popup and search page both show live progress, but the badge is the
-  // one indicator visible without opening anything: "42%" while a job runs
-  // (hover the button for counts), "!" if the last job failed, blank idle.
+  // one indicator visible without opening anything: "42%" while a job runs,
+  // "!" if the last job failed, blank idle. The button's tooltip stays a
+  // constant label — job state lives in the badge, the popup strip and the
+  // search page, never in the title bar.
 
-  const PHASE_TITLE = {
-    building: "Indexing",
-    "catching-up": "Indexing",
-    reconciling: "Verifying and repairing",
-  };
+  const BTN_TITLE = 'AI OmniSearch';
+  let btnTitleSet = false;
+
+  // Every badge setter is an async IPC round trip, so progress ticks used to
+  // overlap and the writes interleaved: the last "99%" of a finishing job
+  // could land AFTER the render that cleared it, leaving the button stuck at
+  // 99% (and green) until the next job. Render one state at a time, and if the
+  // status moved while a render was in flight, render again.
+  let badgeBusy = false;
+  let badgeDirty = false;
 
   async function updateBadge() {
+    if (badgeBusy) {
+      badgeDirty = true;
+      return;
+    }
+    badgeBusy = true;
+    try {
+      do {
+        badgeDirty = false;
+        await renderBadge();
+      } while (badgeDirty);
+    } finally {
+      badgeBusy = false;
+    }
+    // A tick that arrived after the loop's last check still needs a render.
+    if (badgeDirty) updateBadge();
+  }
+
+  async function renderBadge() {
     const btn = messenger.browserAction;
     if (!btn || !btn.setBadgeText) return;
     try {
-      if (status.running) {
-        if (status.total > 0) {
-          const pct = Math.min(99, Math.floor((status.processed / status.total) * 100));
-          await btn.setBadgeBackgroundColor({ color: "#086A78" });
+      // Once per session: this runs on every progress tick, and the title
+      // never changes, so it must not cost an IPC call per message.
+      if (!btnTitleSet) {
+        await btn.setTitle({ title: BTN_TITLE });
+        btnTitleSet = true;
+      }
+      // Snapshot the state this render is for, so a tick landing mid-render
+      // cannot produce a mix (e.g. cleared text with the running colour).
+      const { running, total, processed, lastError } = status;
+      if (running) {
+        await btn.setBadgeBackgroundColor({ color: "#086A78" });
+        if (total > 0) {
+          const pct = Math.min(99, Math.floor((processed / total) * 100));
           await btn.setBadgeText({ text: `${pct}%` });
-          await btn.setTitle({
-            title:
-              `AI OmniSearch — ${PHASE_TITLE[status.phase] || status.phase}: ` +
-              `${status.processed.toLocaleString()}/${status.total.toLocaleString()} (${pct}%)`,
-          });
         } else {
           // No meaningful total yet (catch-up / reconcile): signal activity.
-          await btn.setBadgeBackgroundColor({ color: "#086A78" });
           await btn.setBadgeText({ text: "•" });
-          await btn.setTitle({
-            title: `AI OmniSearch — ${PHASE_TITLE[status.phase] || status.phase}…`,
-          });
         }
-      } else if (status.lastError) {
+      } else if (lastError) {
         await btn.setBadgeBackgroundColor({ color: "#c62828" });
         await btn.setBadgeText({ text: "!" });
-        await btn.setTitle({ title: `AI OmniSearch — last job failed: ${status.lastError}` });
       } else {
+        // Idle and healthy: nothing to show. Clear the text and put the colour
+        // back so a finished job leaves no trace on the button.
         await btn.setBadgeText({ text: "" });
-        await btn.setTitle({ title: "AI OmniSearch" });
+        await btn.setBadgeBackgroundColor({ color: "#086A78" });
       }
     } catch (e) {
       // Badge API unavailable in this build — progress stays in the pages.
@@ -181,8 +207,13 @@
   function fullBuild() {
     return runJob('building', async () => {
       const startedAt = Date.now();
+      // A doc the server could not store is skipped there (logged, retried on
+      // the next pass) rather than failing the whole run — carry that count to
+      // the UI so the skip is not silent.
+      let failed = 0;
       const sink = async (docs) => {
-        await AIOSClient.ingest(docs);
+        const r = await AIOSClient.ingest(docs);
+        if (r && r.failed) failed += r.failed;
       };
       const result = await AIOSReader.fullBuild(extractor, sink, (frac, count, headerOnly, total) => {
         setStatus({ processed: count, total, headerOnly });
@@ -191,7 +222,7 @@
       // catch-up watermarks so the next catch-up is O(new mail) instead of
       // another full walk. Skipped entirely if the build threw.
       await AIOSEvents.markAllCaughtUp(startedAt);
-      return result;
+      return failed ? { ...result, failed } : result;
     });
   }
 

@@ -91,15 +91,29 @@ class VectorStore:
         logger.debug("Upserted %d points", len(points))
 
     def set_payload(self, point_ids: list[str], payload: dict[str, Any]) -> None:
-        """Update payload fields on existing points (no re-embedding)."""
+        """Update payload fields on existing points (no re-embedding).
+
+        A point can legitimately be missing: mail Ollama refused to embed is
+        stored keyword-only (FTS) with no vector, and the payload write for its
+        folder list or attachment names must not fail the whole ingest batch.
+        """
         if not point_ids:
             return
-        self.client.set_payload(
-            collection_name=self.collection,
-            payload=payload,
-            points=point_ids,
-            wait=True,
-        )
+        try:
+            self.client.set_payload(
+                collection_name=self.collection,
+                payload=payload,
+                points=point_ids,
+                wait=True,
+            )
+        except KeyError as e:
+            # Local (in-memory) Qdrant raises on an unknown point id.
+            logger.debug("set_payload skipped for %d point(s): %s", len(point_ids), e)
+        except Exception as e:
+            if getattr(e, "status_code", None) == 404:
+                logger.debug("set_payload skipped for %d point(s): %s", len(point_ids), e)
+                return
+            raise  # a real outage still fails the batch, so it gets retried
 
     def search(
         self,

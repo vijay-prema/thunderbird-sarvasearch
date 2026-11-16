@@ -1,5 +1,7 @@
 """HTTP API tests through the FastAPI TestClient."""
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -47,6 +49,32 @@ def test_ingest_too_large_batch(services):
 def test_ingest_invalid_doc(services):
     r = services.client.post("/ingest", json={"docs": [{"message_id": "x"}]})
     assert r.status_code == 422
+
+
+def test_ingest_accepts_a_doc_with_a_lone_surrogate(services):
+    # Reported failure: the add-on sent half an emoji, Qdrant's JSON encoder
+    # raised UnicodeEncodeError, and the whole rebuild died with a 502.
+    half = chr(0xD83D)
+    doc = services.make_doc(
+        mid="surrogate@x.com",
+        subject="Party " + half + " invite",
+        body="x" * 3985 + half + " see you there",
+    )
+    # httpx itself refuses to UTF-8-encode a lone surrogate, and a browser's
+    # fetch() would already have replaced it — so send the raw JSON body, where
+    # an ASCII \ud83d escape reaches the server as the same broken character an
+    # older add-on put on the wire.
+    payload = json.dumps({"docs": [doc]}).encode("ascii")
+    r = services.client.post(
+        "/ingest", content=payload, headers={"Content-Type": "application/json"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["indexed"] == 1
+    # ... and the repaired text is what search hands back.
+    r = services.client.post("/search", json={"query": "Party", "mode": "keyword"})
+    assert r.status_code == 200
+    subjects = [x["subject"] for x in r.json()["results"]]
+    assert any("\ufffd" in s for s in subjects), subjects
 
 
 def test_has_endpoint(services):

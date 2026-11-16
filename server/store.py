@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS docs (
     header_only INTEGER NOT NULL DEFAULT 0,
     encrypted INTEGER NOT NULL DEFAULT 0,
     numeric_id INTEGER,
+    attachments TEXT NOT NULL DEFAULT '[]',
     indexed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     UNIQUE(account_id, message_id)
 );
@@ -55,6 +56,35 @@ def escape_like(value: str) -> str:
     return (
         value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     )
+
+
+def load_json_list(value: Any) -> list[str]:
+    """Decode a JSON-encoded list column, tolerating NULL/garbage/old rows."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+# Columns added after the first release, applied to an existing database file
+# on open (CREATE TABLE IF NOT EXISTS never adds a column to a live table).
+_MIGRATIONS = (
+    ("attachments", "ALTER TABLE docs ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'"),
+)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(docs)").fetchall()}
+    for column, ddl in _MIGRATIONS:
+        if column not in existing:
+            logger.info("store: adding column %s", column)
+            conn.execute(ddl)
+    conn.commit()
 
 
 class KeywordFilters:
@@ -103,6 +133,7 @@ def match_record(row: sqlite3.Row) -> dict[str, Any]:
         "header_only": bool(row["header_only"]),
         "encrypted": bool(row["encrypted"]),
         "numeric_id": row["numeric_id"],
+        "attachments": load_json_list(row["attachments"]),
     }
 
 
@@ -117,6 +148,7 @@ class DocStore:
         self._lock = threading.RLock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            _migrate(self._conn)
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.commit()
@@ -170,16 +202,30 @@ class DocStore:
         header_only: bool,
         encrypted: bool,
         numeric_id: Optional[int],
+        attachments: Optional[Iterable[str]] = None,
     ) -> int:
-        """Insert or replace the docs row. Returns the rowid."""
+        """Insert or replace the docs row. Returns the rowid.
+
+        ``attachments=None`` keeps whatever attachment names are already
+        stored (a re-read that could not see the MIME parts must not erase
+        them); pass a list to overwrite.
+        """
         with self._lock:
+            if attachments is None:
+                prior = self._conn.execute(
+                    "SELECT attachments FROM docs WHERE account_id = ? AND message_id = ?",
+                    (account_id, message_id),
+                ).fetchone()
+                attachments_json = prior["attachments"] if prior else "[]"
+            else:
+                attachments_json = json.dumps(list(attachments))
             cur = self._conn.execute(
                 """
                 INSERT INTO docs (
                     account_id, message_id, content_hash, subject, from_addr,
                     to_addr, date, date_ms, account_name, folders, snippet,
-                    header_only, encrypted, numeric_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    header_only, encrypted, numeric_id, attachments
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id, message_id) DO UPDATE SET
                     content_hash = excluded.content_hash,
                     subject = excluded.subject,
@@ -192,12 +238,14 @@ class DocStore:
                     snippet = excluded.snippet,
                     header_only = excluded.header_only,
                     encrypted = excluded.encrypted,
-                    numeric_id = excluded.numeric_id
+                    numeric_id = excluded.numeric_id,
+                    attachments = excluded.attachments
                 """,
                 (
                     account_id, message_id, content_hash, subject, from_addr,
                     to_addr, date, date_ms, account_name, json.dumps(folders),
                     snippet, int(header_only), int(encrypted), numeric_id,
+                    attachments_json,
                 ),
             )
             self._conn.commit()
@@ -237,6 +285,21 @@ class DocStore:
             self._conn.execute(
                 "UPDATE docs SET account_name = ? WHERE account_id = ? AND message_id = ?",
                 (account_name, account_id, message_id),
+            )
+            self._conn.commit()
+
+    def set_attachments(
+        self, account_id: str, message_id: str, attachments: list[str]
+    ) -> None:
+        """Refresh attachment names on an existing row (no content change).
+
+        Adding attachment names does not touch the embed text, so a rebuild
+        backfills a pre-attachments index without re-embedding anything.
+        """
+        with self._lock:
+            self._conn.execute(
+                "UPDATE docs SET attachments = ? WHERE account_id = ? AND message_id = ?",
+                (json.dumps(list(attachments)), account_id, message_id),
             )
             self._conn.commit()
 

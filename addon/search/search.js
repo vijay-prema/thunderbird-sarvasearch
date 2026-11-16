@@ -153,10 +153,39 @@ function createResultCard(result, modeUsed) {
       <span class="badge badge-folder">${escapeHtml(folders)}</span>
       ${flags.join("")}
     </div>
+    ${attachmentsHtml(result)}
     <div class="result-snippet">${escapeHtml(result.snippet || "")}</div>
   `;
 
   return card;
+}
+
+// Attachment names indexed for this message: the first few, then a "+N more"
+// badge (the count only — hovering it lists the rest). Names are captured at
+// index time; messages indexed before that was recorded show none until the
+// next rebuild backfills them (no re-embedding involved).
+const MAX_ATTACHMENT_BADGES = 3;
+
+function attachmentsHtml(result) {
+  const names = Array.isArray(result.attachments) ? result.attachments.filter(Boolean) : [];
+  if (!names.length) return "";
+  const shown = names.slice(0, MAX_ATTACHMENT_BADGES);
+  const rest = names.slice(MAX_ATTACHMENT_BADGES);
+  const badges = shown.map(
+    (name) =>
+      `<span class="badge badge-attachment" title="${escapeAttr(name)}">${escapeHtml(name)}</span>`
+  );
+  if (rest.length) {
+    badges.push(
+      `<span class="badge badge-attachment badge-more" title="${escapeAttr(rest.join(", "))}">+${rest.length} more</span>`
+    );
+  }
+  const label = `${names.length} attachment${names.length === 1 ? "" : "s"}`;
+  return `
+    <div class="result-attachments" title="${escapeAttr(label)}">
+      <span class="attach-icon" aria-hidden="true">📎</span>
+      ${badges.join("")}
+    </div>`;
 }
 
 async function openEmail(result) {
@@ -172,6 +201,78 @@ async function openEmail(result) {
   if (!ok) {
     showToast("Email not found in Thunderbird. It may have been deleted or not synced yet.");
   }
+}
+
+// --- Date range presets ---
+// A quick range writes into the same after/before inputs the search sends, so
+// the dates stay visible and editable — no hidden second filter path. Server
+// semantics: `after` is inclusive from local midnight, `before` is inclusive
+// through the end of that day.
+
+function ymd(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function startOfToday() {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function daysBack(n) {
+  const d = startOfToday();
+  d.setDate(d.getDate() - n);
+  return d;
+}
+
+// value -> {after, before} as YYYY-MM-DD strings. "any" clears both;
+// "custom" is absent on purpose: it leaves the dates the user typed alone.
+const DATE_PRESETS = {
+  any: () => ({ after: "", before: "" }),
+  // "Last 7 days" includes today, so it starts 6 days back.
+  "7d": () => ({ after: ymd(daysBack(6)), before: ymd(startOfToday()) }),
+  "30d": () => ({ after: ymd(daysBack(29)), before: ymd(startOfToday()) }),
+  "60d": () => ({ after: ymd(daysBack(59)), before: ymd(startOfToday()) }),
+  week: () => {
+    const monday = startOfToday();
+    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+    return { after: ymd(monday), before: ymd(startOfToday()) };
+  },
+  month: () => {
+    const today = startOfToday();
+    return {
+      after: ymd(new Date(today.getFullYear(), today.getMonth(), 1)),
+      before: ymd(today),
+    };
+  },
+  lastmonth: () => {
+    const today = startOfToday();
+    return {
+      after: ymd(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
+      before: ymd(new Date(today.getFullYear(), today.getMonth(), 0)),
+    };
+  },
+  year: () => {
+    const today = startOfToday();
+    return { after: ymd(new Date(today.getFullYear(), 0, 1)), before: ymd(today) };
+  },
+};
+
+function applyDatePreset(name) {
+  const preset = DATE_PRESETS[name];
+  if (!preset) return false; // "custom": keep what is in the date inputs
+  const { after, before } = preset();
+  document.getElementById("after-filter").value = after;
+  document.getElementById("before-filter").value = before;
+  return true;
+}
+
+function markRangeCustom() {
+  document.getElementById("range-preset").value = "custom";
+}
+
+function searchIfQuery() {
+  if (document.getElementById("search-input").value.trim()) doSearch();
 }
 
 // --- Mode toggle ---
@@ -401,7 +502,8 @@ function jobSummary(result) {
   if (result == null) return "";
   if (result.count != null) {
     return `Indexed ${result.count.toLocaleString()} messages` +
-      (result.headerOnly ? ` (${result.headerOnly.toLocaleString()} header-only)` : "");
+      (result.headerOnly ? ` (${result.headerOnly.toLocaleString()} header-only)` : "") +
+      (result.failed ? ` · ${result.failed.toLocaleString()} skipped, see the server log` : "");
   }
   if (result.scanned != null) {
     return `Catch-up: scanned ${result.scanned.toLocaleString()}, indexed ${result.added.toLocaleString()}`;
@@ -460,6 +562,14 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+// escapeHtml leaves quotes alone, which breaks out of an attribute value
+// (an attachment name with a `"` in it, say).
+function escapeAttr(text) {
+  return escapeHtml(String(text == null ? "" : text))
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function formatDate(isoDate) {
   if (!isoDate) return "";
   try {
@@ -496,11 +606,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("account-filter").addEventListener("change", () => {
     if (document.getElementById("search-input").value.trim()) doSearch();
   });
+  document.getElementById("range-preset").addEventListener("change", (e) => {
+    const applied = applyDatePreset(e.target.value);
+    if (!applied) {
+      // "Custom range": leave the dates as they are and let the user edit them.
+      document.getElementById("after-filter").focus();
+      return;
+    }
+    searchIfQuery();
+  });
   document.getElementById("after-filter").addEventListener("change", () => {
-    if (document.getElementById("search-input").value.trim()) doSearch();
+    markRangeCustom();
+    searchIfQuery();
   });
   document.getElementById("before-filter").addEventListener("change", () => {
-    if (document.getElementById("search-input").value.trim()) doSearch();
+    markRangeCustom();
+    searchIfQuery();
   });
 
   document.getElementById("open-settings").addEventListener("click", () => {

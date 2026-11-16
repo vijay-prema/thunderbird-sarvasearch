@@ -3,6 +3,7 @@
 import asyncio
 import math
 import re
+import zlib
 from types import SimpleNamespace
 
 import pytest
@@ -45,8 +46,11 @@ class FakeEmbedder(EmbeddingProvider):
 
     def _one(self, text):
         vec = [0.0] * self.DIMS
+        # crc32, not hash(): hash() is salted per process, so the vector a
+        # word maps to — and therefore every ranking assertion — changed
+        # between runs (a flaky suite for no reason).
         for tok in re.findall(r"\w+", text.lower()):
-            vec[hash(tok) % self.DIMS] += 1.0
+            vec[zlib.crc32(tok.encode("utf-8")) % self.DIMS] += 1.0
         norm = math.sqrt(sum(x * x for x in vec)) or 1.0
         return [x / norm for x in vec]
 

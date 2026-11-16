@@ -156,6 +156,22 @@ def test_invalid_mode_rejected(services):
         search(services, query="x", mode="bogus")
 
 
+def test_results_carry_attachment_names(services):
+    services.run(services.ingest.ingest([
+        IngestDoc(**services.make_doc(
+            mid="att@x.com", subject="Invoice attached",
+            attachments=["invoice-2024.pdf", "timesheet.xlsx"],
+        )),
+        IngestDoc(**services.make_doc(mid="plain@x.com", subject="Invoice plain")),
+    ]))
+    # Keyword path (records straight from the docs table) ...
+    for mode in ("keyword", "semantic", "hybrid"):
+        r = search(services, query="invoice attached", mode=mode)
+        by_id = {x["message_id"]: x for x in r["results"]}
+        assert by_id["att@x.com"]["attachments"] == ["invoice-2024.pdf", "timesheet.xlsx"], mode
+        assert by_id["plain@x.com"]["attachments"] == [], mode
+
+
 def test_empty_query(services):
     r = search(services, query="   ", mode="hybrid")
     assert r["results"] == []

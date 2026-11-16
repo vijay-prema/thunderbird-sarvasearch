@@ -23,7 +23,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from server.embeddings import EmbeddingProvider
-from server.store import DocStore, KeywordFilters
+from server.store import DocStore, KeywordFilters, load_json_list
 from server.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -260,6 +260,7 @@ class SearchService:
             "header_only": bool(row["header_only"]),
             "encrypted": bool(row["encrypted"]),
             "numeric_id": row["numeric_id"],
+            "attachments": load_json_list(row.get("attachments")),
         }
 
     @staticmethod
@@ -278,6 +279,7 @@ class SearchService:
             "header_only": payload.get("header_only", False),
             "encrypted": payload.get("encrypted", False),
             "numeric_id": payload.get("numeric_id"),
+            "attachments": payload.get("attachments") or [],
         }
 
     @staticmethod

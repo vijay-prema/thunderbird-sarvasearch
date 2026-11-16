@@ -159,6 +159,7 @@
       numeric_id: Number(doc.id) || null,
       header_only: !doc.bodyAvailable,
       encrypted: !!doc.encrypted,
+      attachments: doc.attachments || [],
     };
   }
 

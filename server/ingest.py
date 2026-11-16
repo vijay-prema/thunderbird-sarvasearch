@@ -20,13 +20,14 @@ re-embeds it (wasteful, self-healing).
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from server.embeddings import EmbeddingProvider
-from server.store import DocStore
+from server.store import DocStore, load_json_list
 from server.vector_store import VectorStore, make_point_id
 from qdrant_client import models as qmodels
 
@@ -37,6 +38,23 @@ SNIPPET_LEN = 300
 # Log one INFO summary line every N docs stored (new + updated), instead of
 # a line per request — during a full index the requests never stop.
 _LOG_EVERY = 500
+
+# Any UTF-16 surrogate code point. Python decodes proper emoji to one code
+# point (> U+FFFF), so a surrogate here is always half of a broken pair.
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def clean_text(value: str) -> str:
+    """Replace unpaired UTF-16 surrogates with U+FFFD.
+
+    Thunderbird's MIME decoding (and a body cut mid-emoji) can hand us a lone
+    half of a surrogate pair. UTF-8 cannot encode it, so the Qdrant payload's
+    JSON and the SQLite write both raise — and one such message took down a
+    whole ingest batch, and with it a whole rebuild job. Repair on the way in:
+    the add-on normalises what it sends, this covers anything already in
+    flight, an older add-on, or a hand-written ingest client.
+    """
+    return _SURROGATE.sub("\ufffd", value)
 
 
 class IngestDoc(BaseModel):
@@ -56,8 +74,33 @@ class IngestDoc(BaseModel):
     numeric_id: Optional[int] = None  # Thunderbird's per-session id (open hint)
     header_only: bool = False  # body not downloaded
     encrypted: bool = False
+    # File names of the message's attachments (names only, never content).
+    attachments: list[str] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _repair_text(cls, data: Any) -> Any:
+        """Normalise every incoming string before anything is hashed or stored.
+
+        Runs before the content hash is computed, so a repaired body hashes to
+        what is stored and a retry is stable (not a loop of "content changed").
+        """
+        if not isinstance(data, dict):
+            return data
+        cleaned: dict[str, Any] = {}
+        for key, value in data.items():
+            if isinstance(value, str):
+                cleaned[key] = clean_text(value)
+            elif isinstance(value, list):
+                cleaned[key] = [
+                    clean_text(item) if isinstance(item, str) else item
+                    for item in value
+                ]
+            else:
+                cleaned[key] = value
+        return cleaned
 
 
 class DeleteItem(BaseModel):
@@ -126,6 +169,7 @@ class IngestService:
             "header_only": doc.header_only,
             "encrypted": doc.encrypted,
             "numeric_id": doc.numeric_id,
+            "attachments": doc.attachments,
         }
 
     def _upsert_all(
@@ -163,6 +207,7 @@ class IngestService:
             header_only=doc.header_only,
             encrypted=doc.encrypted,
             numeric_id=doc.numeric_id,
+            attachments=doc.attachments,
         )
         self.docstore.fts_upsert(rowid, doc.subject, doc.from_, doc.to, doc.body)
 
@@ -177,6 +222,7 @@ class IngestService:
             "folders_added": 0,  # known content, new folder → merged, no embed
             "unchanged": 0,     # already indexed, nothing to do
             "embed_failed": 0,  # Ollama rejected the input (keyword-only now)
+            "failed": 0,        # store rejected this doc; logged, retried later
         }
 
         existing = self.docstore.get_many(
@@ -199,6 +245,26 @@ class IngestService:
                 if doc.account_name and doc.account_name != prior["account_name"]:
                     self.docstore.set_account_name(
                         doc.account_id, doc.message_id, doc.account_name
+                    )
+                # Attachment names are not part of the embed text, so a re-read
+                # that finally sees them (schema added after the first index)
+                # backfills them without re-embedding. A non-empty list always
+                # came from a parsed MIME tree, so it can be written as is; an
+                # empty one is only trustworthy when the read actually had a
+                # body — a header-only or failed read sends [] because it could
+                # not see the parts, which must not erase stored names. The
+                # empty-and-authoritative case matters for repair: v2.4.0
+                # mislabelled every message "ForwardedMessage.eml".
+                prior_attachments = load_json_list(prior["attachments"])
+                if doc.attachments != prior_attachments and (
+                    doc.attachments or not doc.header_only
+                ):
+                    self.docstore.set_attachments(
+                        doc.account_id, doc.message_id, doc.attachments
+                    )
+                    self.store.set_payload(
+                        [make_point_id(doc.account_id, doc.message_id)],
+                        {"attachments": doc.attachments},
                     )
                 if doc.folder in prior_folders:
                     result["unchanged"] += 1
@@ -225,26 +291,46 @@ class IngestService:
             except Exception as e:
                 logger.error("Embedding failed for batch of %d: %s", len(texts), e)
                 raise
+            chunk_failures = 0
             for (doc, _text, chash, folders), vector in zip(chunk, vectors):
-                if vector is None:
-                    # Ollama rejected this single input. Store it keyword-only
-                    # (FTS still finds it); the matching content hash means we
-                    # do not retry it on every pass.
-                    self._upsert_all(doc, _text, chash, folders, None)
-                    result["embed_failed"] += 1
-                else:
-                    self._upsert_all(doc, _text, chash, folders, vector)
-                    if (doc.account_id, doc.message_id) in existing:
-                        result["updated"] += 1
+                try:
+                    if vector is None:
+                        # Ollama rejected this single input. Store it keyword-only
+                        # (FTS still finds it); the matching content hash means we
+                        # do not retry it on every pass.
+                        self._upsert_all(doc, _text, chash, folders, None)
+                        result["embed_failed"] += 1
                     else:
-                        result["indexed"] += 1
+                        self._upsert_all(doc, _text, chash, folders, vector)
+                        if (doc.account_id, doc.message_id) in existing:
+                            result["updated"] += 1
+                        else:
+                            result["indexed"] += 1
+                except Exception as e:
+                    # One unstorable message (a payload the store rejects) must
+                    # not abort the batch and, with it, the whole rebuild — the
+                    # run would restart from this same message every time.
+                    # Log it with its identity, skip it, and keep going; the
+                    # next pass retries it (nothing was recorded as stored).
+                    result["failed"] += 1
+                    chunk_failures += 1
+                    logger.warning(
+                        "ingest: skipping %s / %s (%r): %s",
+                        doc.account_id, doc.message_id,
+                        (doc.subject or "")[:60], e,
+                    )
+                    if chunk_failures == len(chunk):
+                        # Every doc in this request failed the same way: that is
+                        # the store being down, not one poison message.
+                        raise
 
         prev = self._stored_total
         self._stored_total += result["indexed"] + result["updated"]
         logger.debug(
-            "ingest: received=%d indexed=%d updated=%d folders_added=%d unchanged=%d embed_failed=%d",
+            "ingest: received=%d indexed=%d updated=%d folders_added=%d unchanged=%d embed_failed=%d failed=%d",
             result["received"], result["indexed"], result["updated"],
             result["folders_added"], result["unchanged"], result["embed_failed"],
+            result["failed"],
         )
         if self._stored_total // _LOG_EVERY > prev // _LOG_EVERY:
             logger.info(
