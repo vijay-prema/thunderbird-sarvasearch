@@ -275,8 +275,7 @@
     if (alarm.name === ALARM) catchUp();
   });
 
-  // Spaces toolbar entry, reachable from every Thunderbird space (from the
-  // upstream thunderbird-ai-search addon).
+  // Spaces toolbar entry, reachable from every Thunderbird space.
   async function ensureSpaceRegistered() {
     if (!messenger.spaces || !messenger.spaces.create) return;
     try {
@@ -293,7 +292,7 @@
   }
 
   async function ensureDefaultSettings() {
-    // Merges defaults, prunes the 2.x server keys, and rewrites the copy.
+    // Writes the defaults on first run.
     await AIOSSettings.ensure();
   }
 

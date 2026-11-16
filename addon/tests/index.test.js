@@ -1,8 +1,7 @@
 'use strict';
 // Ingest, folder-merge, attachment-backfill, reconcile and clear semantics.
-// These are the rules the Python server enforced; losing one silently corrupts
-// the index (a re-embedded mailbox, or attachment names wiped by a header-only
-// re-read), so each has a test.
+// Losing one of these rules silently corrupts the index (a re-embedded mailbox,
+// or attachment names wiped by a header-only re-read), so each has a test.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -125,7 +124,7 @@ test('an authoritative empty attachment list clears wrong names', async () => {
   const d = doc();
   await globalThis.AIOSIndex.ingest([d]);
   await globalThis.AIOSIndex.ingest([doc({ attachments: ['wrong.eml'] })]);
-  // A full read that definitively sees no attachments (v2.4 mislabelled them).
+  // A full read that definitively sees no attachments must clear a wrong value.
   await globalThis.AIOSIndex.ingest([doc({ attachments: [], header_only: false })]);
 
   assert.deepStrictEqual(qdrant.points.get(await idOf(d)).payload.attachments, []);

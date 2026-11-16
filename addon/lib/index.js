@@ -1,21 +1,19 @@
 'use strict';
 // The index itself: ingest, freshness bookkeeping, repairs. Exposes
-// globalThis.AIOSIndex. This replaces the Python server's ingest + SQLite store.
+// globalThis.AIOSIndex.
 //
-// The server used SQLite as the source of truth (content hashes, folder lists)
-// and Qdrant only for vectors. Here Qdrant is both: a message's point carries
-// its payload, so the hash and folder list live next to the vector and every
-// rule below is expressed as "retrieve the point, compare, write back".
+// Qdrant is the whole store: a message's point carries its payload, so the
+// content hash and folder list live next to the vector and every rule below is
+// expressed as "retrieve the point, compare, write back". There is no second
+// database to keep in sync.
 //
 //   point id      uuid5(account|message-id)   stable identity, no local table
 //   content_hash  sha256(embed text)          unchanged content is never re-embedded
 //   folders       merged across copies        the point dies only with its last folder
 //
-// One deliberate loss: the old server could store a message keyword-only (in
-// SQLite) when Ollama refused to embed it. A Qdrant point needs a vector, so
-// such a message is skipped and remembered in a small failure map — it is not
-// findable until the embedder accepts it, but it is not re-attempted every pass
-// either.
+// A point needs a vector, so a message the embedder refuses is skipped and
+// remembered in a small failure map: not findable until the embedder accepts it,
+// but not re-sent on every pass either.
 (function () {
   const SNIPPET_LEN = 200;
   const FAIL_KEY = 'aios_embed_failures';

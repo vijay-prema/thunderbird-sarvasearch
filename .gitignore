@@ -7,13 +7,6 @@ build/
 node_modules/
 coverage/
 
-# Qdrant exports written by tools/qdrant_export.py
-*.jsonl
-
-# Upstream leftovers
-state.json
-qdrant_data/
-
 # Editors / agents
 .claude/
 CLAUDE.md

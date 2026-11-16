@@ -7,10 +7,10 @@
 //
 // Events alone cannot keep the index correct — onNewMailReceived fires when a
 // message is *received*, which structurally cannot cover mail synced while
-// Thunderbird was closed, mail filed server-side, or mail sent from another
-// device. thunderbird-omnisearch measured that on a real profile (75% of one
-// month's Archive mail missing, 81% of INBOX, 100% of Sent), and the same
-// gap applies here.
+// Thunderbird was closed, mail filed by a rule on the mail server, or mail sent
+// from another device. thunderbird-omnisearch measured that on a real profile
+// (75% of one month's Archive mail missing, 81% of INBOX, 100% of Sent), and the
+// same gap applies here.
 //
 // So freshness is a PULL, with events as the low-latency fast path on top:
 // catchUp() re-walks everything newer than a stored watermark (with a 1-day

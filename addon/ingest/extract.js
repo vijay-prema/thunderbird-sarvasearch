@@ -275,10 +275,10 @@
   // thread, since they come off the MessageHeader object): id, headerMessageId,
   // subject, from, to, date (ms), folderName, accountId, accountName.
   //
-  // Every string the server will store is normalised here (see clean): the
+  // Every string that will be stored is normalised here (see clean): the
   // subject and sender are decoded by Thunderbird and can contain a lone
-  // surrogate just as a cut body can, and one of those fails the whole ingest
-  // batch at the server.
+  // surrogate just as a cut body can, and one of those fails a whole ingest
+  // batch.
   function makeDoc(headerMeta, text, available, encrypted, attachments) {
     const body = clean(text || '');
     return {

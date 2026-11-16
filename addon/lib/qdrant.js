@@ -1,9 +1,9 @@
 'use strict';
 // Qdrant REST client. Exposes globalThis.AIOSQdrant.
 //
-// Qdrant is the whole index now: it holds the vectors, the message payloads,
-// the content hashes and the BM25 text indexes. That is the reason this add-on
-// has no server — the JavaScript here is a thin REST wrapper, not a database.
+// Qdrant is the whole index: it holds the vectors, the message payloads, the
+// content hashes and the BM25 text indexes. The JavaScript here is a thin REST
+// wrapper, not a database.
 //
 // Collection layout (see ensure()):
 //   vector       unnamed, Cosine, sized by the embedding model
@@ -68,8 +68,8 @@
   }
 
   // Create the collection and every index it needs. Idempotent: safe to run on
-  // every startup, and it repairs a collection that lost an index (a partial
-  // migration, or an index deleted by hand).
+  // every startup, and it repairs a collection that lost an index (deleted by
+  // hand, say).
   async function ensure(dimensions) {
     const s = await AIOSSettings.get();
     if (!(await exists())) {

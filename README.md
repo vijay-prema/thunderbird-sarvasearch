@@ -2,15 +2,14 @@
 
 Hybrid **semantic + keyword** search for Thunderbird, powered entirely by services on
 your own machine. The add-on indexes the mail Thunderbird has already downloaded and
-writes it **straight into Qdrant** — there is no companion server, no service to
-supervise, and no IMAP connection of its own.
+writes it **straight into Qdrant** — no IMAP connection of its own, and nothing else
+to run.
 
-This is a fork of [giovi321/thunderbird-ai-search](https://github.com/giovi321/thunderbird-ai-search)
-whose IMAP pull-indexer was replaced by Thunderbird-side ingestion ported from
-[CR0CKER/thunderbird-omnisearch](https://github.com/CR0CKER/thunderbird-omnisearch)
-(MIT — folder walking, MIME text extraction, event handling, catch-up/reconcile and
-result-opening logic are adapted from its `lib/`). Both upstreams are MIT licensed;
-attribution is preserved in the file headers.
+Built on two MIT-licensed projects: [giovi321/thunderbird-ai-search](https://github.com/giovi321/thunderbird-ai-search)
+(the add-on UI) and [CR0CKER/thunderbird-omnisearch](https://github.com/CR0CKER/thunderbird-omnisearch)
+(folder walking, MIME text extraction, event handling, catch-up/reconcile and
+result-opening logic, adapted from its `lib/`). Attribution is preserved in the file
+headers.
 
 ```
 ┌────────────────────────────┐
@@ -43,7 +42,7 @@ attribution is preserved in the file headers.
   your Qdrant is too old.
 - [Ollama](https://ollama.ai) with an embedding model:
   `ollama pull nomic-embed-text` (768d, ~274 MB)
-- Nothing else. No Python, and Docker only if you want it.
+- Nothing else — Docker only if you want it.
 
 ### Thunderbird: download full bodies
 
@@ -100,9 +99,9 @@ automatically on first use — there is nothing to prepare.
    delete, or folder-remove.
 2. **Daily catch-up** (and at every Thunderbird start) — re-walks everything newer
    than a per-account watermark (with a 1-day overlap). Covers mail synced while
-   Thunderbird was closed, filed server-side, or sent from elsewhere. Events alone
-   measurably miss such mail (omnisearch measured 75–100% of some folders missing
-   before adding this pull).
+   Thunderbird was closed, filed by a rule on the mail server, or sent from
+   elsewhere. Events alone measurably miss such mail (omnisearch measured 75–100%
+   of some folders missing before adding this pull).
 3. **Verify and repair** (manual) — diffs the index against every live message:
    deletes stale records, fixes folder drift, re-ingests the missing. Catches the one
    hole a watermark cannot see: back-dated mail imported today.
@@ -154,51 +153,6 @@ Result cards also list the message's **attachment file names** (the first three,
 part of the embedded text, so a rebuild backfills (and corrects) them without
 re-embedding anything.
 
-## Upgrading from 2.x
-
-2.x shipped a Python FastAPI server with its own SQLite keyword index and expected
-Qdrant 1.15. 3.0 removed the server: the add-on does that work itself. Two migrations
-are involved.
-
-**The add-on** is simply replaced — its options page now wants the Qdrant and Ollama
-URLs instead of a server URL, and the old `serverUrl`/`apiKey` settings are dropped
-automatically.
-
-**The Qdrant collection** has to be carried across, because Qdrant 1.16 removed the
-`rocks_db` payload-index backend that 1.15 wrote into the collection's index config,
-and 1.20 refuses to load such a shard (`unknown variant 'rocks_db'`). There is no
-forward migration for that config. The tools here move the data **without re-embedding
-anything** — vectors are exported as they are:
-
-```bash
-# 1. with the OLD Qdrant (1.15) still running
-python3 tools/qdrant_export.py --collection ai_omnisearch --out ai_omnisearch.jsonl
-
-# 2. stop it, start Qdrant 1.20 on a fresh storage directory (leave the old one alone)
-docker run -d --name qdrant --restart unless-stopped \
-  -p 127.0.0.1:6333:6333 -p 127.0.0.1:6334:6334 \
-  -v "$HOME/Docker/qdrant/qdrant_storage_v120:/qdrant/storage" \
-  qdrant/qdrant:v1.20.0
-
-# 3. import: creates the collection, payload indexes and BM25 text indexes, and
-#    recomputes content_hash from the payload (it used to live only in the old
-#    server's SQLite — without it the next catch-up would treat every message as
-#    new and re-embed the whole mailbox)
-python3 tools/qdrant_import.py --collection ai_omnisearch --in ai_omnisearch.jsonl
-
-# 4. check the add-on's own code against the migrated index (no Thunderbird needed)
-node tools/verify-live.js --roundtrip
-```
-
-The export is resumable (`--offset N`, printed on every progress line) and never
-writes to the source collection. Keep the 1.15 storage directory until step 4 passes.
-
-Two deliberate behaviour changes: a message Ollama refuses to embed used to be stored
-keyword-only in SQLite — a Qdrant point needs a vector, so 3.0 skips such a message,
-remembers the failure, and retries it only when its content changes (or after
-**Clear index**). And sender/recipient filters now match whole tokens ("acme" hits
-`priya@acme-plumbing`) rather than arbitrary substrings.
-
 ## Privacy & security
 
 - Everything stays on your machine: mail bodies go from Thunderbird straight to your
@@ -233,7 +187,7 @@ addon/
   search/         search page
   options/ popup/ icons/
   tests/          node:test suites + harness
-tools/            qdrant_export.py, qdrant_import.py, verify-live.js
+tools/            verify-live.js — drive the add-on's modules against live services
 ```
 
 ## Credits

@@ -64,7 +64,7 @@
       const text = await resp.text().catch(() => '');
       if (resp.status >= 500) {
         lastErr = new Error(`${resp.status}: ${detailOf(text)}`);
-        continue; // server-side hiccup: retry
+        continue; // 5xx from the service: retry
       }
       // 4xx: a bad request will never succeed on retry.
       const err = new Error(`${resp.status}: ${detailOf(text)}`);

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Thunderbird AI OmniSearch",
-  "description": "Hybrid semantic + keyword search over your Thunderbird mail, powered by local AI. Indexes mail Thunderbird already downloaded, straight into Qdrant - no server, no IMAP.",
+  "description": "Hybrid semantic + keyword search over your Thunderbird mail, powered by local AI. Indexes the mail Thunderbird already downloaded, straight into Qdrant.",
   "version": "3.0.0",
   "author": "Vijay Prema",
   "homepage_url": "https://github.com/vijay-prema/thunderbird-ai-omnisearch",

@@ -1,16 +1,15 @@
 'use strict';
 // Hybrid search over Qdrant. Exposes globalThis.AIOSSearch.
 //
-// The old server ran two engines in Python and fused them with RRF:
+// Two engines, fused with RRF:
 //
-//   keyword  SQLite FTS5, bm25 with column weights subject 8 : from 4 : to 2 : body 1
+//   keyword  Qdrant BM25 text indexes, weighted subject 8 : from 4 : to 2 : body 1
 //   semantic Ollama embedding -> Qdrant cosine
 //
-// Qdrant 1.20 has both halves natively: a BM25-scored full-text index per
-// payload field, and dense vector search. What it does NOT return is which
-// engine ranked a hit at what position — and the result cards show exactly
-// that ("sem #3 · kw #7"). So the ranking maths stays here, in JavaScript,
-// where it is testable without a server:
+// Qdrant has both halves natively, but it does not report which engine ranked a
+// hit at what position — and the result cards show exactly that
+// ("sem #3 · kw #7"). So the ranking maths lives here, in JavaScript, where it
+// is testable without any service running:
 //
 //  1. per-field BM25 text queries (prefix tokenized, so "invo" finds "invoice")
 //  2. those four ranked lists are fused with the configured field weights
@@ -168,9 +167,8 @@
     };
   }
 
-  // search({query, mode, limit, account, from, to, after, before}) -> the same
-  // response shape the old /search endpoint returned, so the result cards and
-  // the status line did not have to change.
+  // search({query, mode, limit, account, from, to, after, before}) -> the shape
+  // the result cards and the status line read.
   async function search(req) {
     const s = req.settings || (await AIOSSettings.get());
     const mode = VALID_MODES.includes(req.mode) ? req.mode : s.mode || 'hybrid';

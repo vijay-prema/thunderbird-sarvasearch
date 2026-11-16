@@ -1,7 +1,7 @@
 'use strict';
 // Reads mail through the Thunderbird WebExtension API — the mail Thunderbird
-// has already downloaded — and turns messages into docs for the search
-// server. No IMAP, no Gloda: we walk folders and read bodies ourselves.
+// has already downloaded — and turns messages into index docs. No IMAP, no
+// Gloda: we walk folders and read bodies ourselves.
 //
 // The pipeline shape (READ_CONCURRENCY workers overlapping getFull I/O and
 // worker-pool extraction, batched flushes) is ported from
@@ -44,7 +44,7 @@
 
   // Whether to index the decrypted bodies of OpenPGP/S-MIME encrypted
   // messages. Default false — encrypted mail is indexed by header only, so no
-  // decrypted plaintext is sent to the server.
+  // decrypted plaintext reaches the index.
   async function getIndexEncryptedBodies() {
     try {
       const r = await messenger.storage.local.get('settings');
@@ -125,7 +125,7 @@
 
   // The already-resolved header fields a doc needs (body/preview come from
   // extraction). RFC Message-ID is stable across restarts, unlike the numeric
-  // id, so it is the server-side identity (see dockey.js).
+  // id, so it is the stored identity (see dockey.js).
   function headerMeta(header, accountNames) {
     const folder = header.folder || {};
     const accountId = folder.accountId || '';
@@ -163,7 +163,7 @@
     };
   }
 
-  // Build a server doc from one MessageHeader (single-message path, used by
+  // Build an index doc from one MessageHeader (single-message path, used by
   // the event listeners). The decrypt read happens here on the main thread —
   // decrypted plaintext is never sent to the extractor pool unless the user
   // opted in to indexing encrypted bodies.
@@ -245,11 +245,11 @@
 
   // Full index build as a producer/consumer pipeline (see the header comment):
   // READ_CONCURRENCY workers pull headers, read bodies and extract text
-  // concurrently, buffering finished docs and flushing them to the server in
-  // batches. sink(docs) is awaited per batch, which applies natural
-  // backpressure when the server (embedding) falls behind. onProgress drives
-  // the UI bar. Resumable: a failure aborts the build, and the next build
-  // skips already-indexed messages server-side (content-hash check).
+  // concurrently, buffering finished docs and flushing them in batches.
+  // sink(docs) is awaited per batch, which applies natural backpressure when
+  // embedding falls behind. onProgress drives the UI bar. Resumable: a failure
+  // aborts the build, and the next build skips already-indexed messages by
+  // content hash.
   async function fullBuild(extractor, sink, onProgress) {
     const folders = await flattenFolders();
     const total = await totalMessageCount(folders);

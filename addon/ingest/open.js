@@ -2,10 +2,10 @@
 // Opening a search result. Exposes globalThis.AIOSOpen.
 //
 // Ported from CR0CKER/thunderbird-omnisearch (MIT) — its lib/open.js — with
-// the result fields renamed to this fork's server record shape
+// the result fields named for this add-on's record shape
 // (numeric_id / headerMessageId / account_id).
 //
-// The identity problem this file solves: the server stores a message's
+// The identity problem this file solves: an indexed point stores a message's
 // numeric Thunderbird id only as a cache hint, because that id is "an
 // internal tracking number that does not remain after a restart" and it
 // "does not follow an email that has been moved to a different folder".
@@ -55,7 +55,7 @@
       const list = (q && q.messages) || [];
       if (!list.length) return null;
       // The same Message-ID can exist in more than one account (the user is
-      // on both sides of a thread), and the server keys per account — so
+      // on both sides of a thread), and the index keys per account — so
       // reopen the copy from the account the result was indexed from.
       if (msg.account_id) {
         const sameAccount = list.find(

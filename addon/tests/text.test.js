@@ -1,8 +1,8 @@
 'use strict';
-// Identity + hashing primitives, pinned against values the Python server
-// produced. If any of these drift, existing points stop being found (the point
-// id changes) or every message looks new (the hash changes) — a silent,
-// expensive bug, so the fixtures come from the real server.
+// Identity + hashing primitives, pinned to fixed fixtures. If any of these
+// drift, stored points stop being found (the point id changes) or every message
+// looks new (the hash changes) — a silent, expensive bug. The fixtures are
+// literals on purpose: they are the data format, not an implementation detail.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -11,7 +11,7 @@ const { loadLib } = require('./harness');
 loadLib('text');
 const T = globalThis.AIOSText;
 
-test('uuid5 point ids match the Python server', async () => {
+test('uuid5 point ids are stable', async () => {
   const cases = [
     ['account2', 'q1w2e3r4t5y6u7i8+9o0p@mail.example.com', '0e9e0811-5bda-5907-ac99-8b136b6f9d82'],
     ['account2', 'local:8637', 'e0d46cef-f892-58df-9565-95f8f0343539'],

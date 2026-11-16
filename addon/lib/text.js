@@ -1,21 +1,21 @@
 'use strict';
 // Text + identity primitives. Exposes globalThis.AIOSText.
 //
-// Three conversions happen here, and all three must stay byte-identical to the
-// values the pre-3.0 server computed, or every stored point stops matching:
+// Three conversions happen here, and all three are load-bearing — change one
+// and every stored point stops matching:
 //
 // 1. surrogate repair — Thunderbird's MIME decoding can hand us half of an
 //    emoji (a body cut at the length cap). A lone surrogate cannot be encoded
-//    as UTF-8, so it broke the whole ingest batch server-side. Repair to U+FFFD
+//    as UTF-8, so it would fail the whole ingest batch. Repair to U+FFFD
 //    BEFORE hashing, so a retry of the same broken text hashes the same.
 // 2. embed text + content hash — the hash is what makes re-indexing cheap:
 //    the same message hashes to the same value and is skipped.
-// 3. the Qdrant point id — uuid5(NAMESPACE_URL, "account|message-id") in the
-//    Python server. Deriving it here means a message maps to one point no
-//    matter which folder it is read from, without a local rowid table.
+// 3. the Qdrant point id — uuid5(NAMESPACE_URL, "account|message-id"). Deriving
+//    it here means a message maps to one point no matter which folder it is
+//    read from, without a local id table.
 (function () {
-  // Python decoded a proper emoji into one code point, so any surrogate code
-  // point here is always half of a broken pair.
+  // A well-formed emoji is one code point (or one valid pair), so an unpaired
+  // surrogate here is always half of a broken character.
   const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
   function repair(value) {
@@ -34,7 +34,8 @@
     return out;
   }
 
-  // The exact text the embedding model sees (server/ingest.py build_embed_text).
+  // The exact text the embedding model sees. Changing this changes every
+  // content hash, so it is a data-format constant, not a preference.
   function embedText(p) {
     return (
       `From: ${p.from || ''}\nTo: ${p.to || ''}\nSubject: ${p.subject || ''}\n` +

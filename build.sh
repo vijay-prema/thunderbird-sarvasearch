@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-version=$(python3 -c 'import json; print(json.load(open("addon/manifest.json"))["version"])')
+version=$(node -p "require('./addon/manifest.json').version")
 name="thunderbird-ai-omnisearch-${version}"
 
 if [[ "${1:-}" == "--dev" ]]; then

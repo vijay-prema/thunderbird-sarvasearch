@@ -181,9 +181,9 @@ async function openEmail(result) {
 
 // --- Date range presets ---
 // A quick range writes into the same after/before inputs the search sends, so
-// the dates stay visible and editable — no hidden second filter path. Server
-// semantics: `after` is inclusive from local midnight, `before` is inclusive
-// through the end of that day.
+// the dates stay visible and editable — no hidden second filter path.
+// `after` is inclusive from local midnight, `before` is inclusive through the
+// end of that day.
 
 function ymd(date) {
   const pad = (n) => String(n).padStart(2, "0");
@@ -271,7 +271,7 @@ async function initModeToggle() {
   });
 }
 
-// --- Account filter + name resolution (straight from Thunderbird, no server) ---
+// --- Account filter + name resolution (straight from Thunderbird) ---
 
 // accountId -> display name (account name, else identity email, else id).
 // Results and stats carry the account_name captured at indexing time — which
@@ -475,7 +475,7 @@ function jobSummary(result) {
   if (result.count != null) {
     return `Indexed ${result.count.toLocaleString()} messages` +
       (result.headerOnly ? ` (${result.headerOnly.toLocaleString()} header-only)` : "") +
-      (result.failed ? ` · ${result.failed.toLocaleString()} skipped, see the server log` : "");
+      (result.failed ? ` · ${result.failed.toLocaleString()} skipped, see the browser console` : "");
   }
   if (result.scanned != null) {
     return `Catch-up: scanned ${result.scanned.toLocaleString()}, indexed ${result.added.toLocaleString()}`;
@@ -514,7 +514,7 @@ async function loadVersion() {
     el.textContent = `addon v${clientVersion} · qdrant v${qdrant}`;
     el.title = `Addon v${clientVersion} · Qdrant v${qdrant}`;
     // BM25 text queries need Qdrant 1.20 or newer; keyword search silently
-    // returns nothing on an older server, so say it instead.
+    // returns nothing on anything older, so say it instead.
     const major = Number(String(qdrant).split(".")[0] || 0);
     const minor = Number(String(qdrant).split(".")[1] || 0);
     if (major < 1 || (major === 1 && minor < 20)) {

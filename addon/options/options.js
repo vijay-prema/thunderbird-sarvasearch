@@ -1,10 +1,9 @@
 // Options page logic for the AI OmniSearch addon.
 //
-// Connection settings are the two services the add-on talks to directly:
-// Qdrant (the index) and Ollama (the embedder). There is no middle server any
-// more, so the health check probes those two endpoints with the values
-// currently in the form — testing what is about to be saved, not the saved
-// copy.
+// Connection settings are the two services the add-on talks to: Qdrant (the
+// index) and Ollama (the embedder). The health check probes those endpoints with
+// the values currently in the form — testing what is about to be saved, not the
+// saved copy.
 
 let jobPoll = null;
 
