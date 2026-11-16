@@ -15,6 +15,8 @@
 //  2. those four ranked lists are fused with the configured field weights
 //     -> one keyword ranking, with each field's rank kept for the UI
 //  3. hybrid fuses that keyword ranking with the semantic ranking, 1/(k+rank)
+//  4. "Latest" keeps that candidate set and orders it newest first, with the
+//     fused relevance position only breaking same-date ties.
 //
 // Field weighting needs the per-field step: a single Qdrant text query over a
 // concatenated field cannot express "subject counts eight times as much".
@@ -68,6 +70,19 @@
       });
     }
     return [...total.values()].sort((a, b) => b.score - a.score || String(a.key).localeCompare(String(b.key)));
+  }
+
+  // "Latest": relevance decides WHICH mail is in play (the fused candidate
+  // set), this decides the ORDER — newest first. Equal dates keep their fused
+  // relevance position, so same-day hits do not flip arbitrarily. Undated
+  // candidates (date_ms 0) go last.
+  function latestOrder(fused, dates) {
+    const relevance = new Map(fused.map((hit, i) => [hit.key, i]));
+    return [...fused].sort(
+      (a, b) =>
+        (dates.get(b.key) || 0) - (dates.get(a.key) || 0) ||
+        relevance.get(a.key) - relevance.get(b.key)
+    );
   }
 
   function keyOf(payload) {
@@ -157,24 +172,44 @@
     };
   }
 
-  function emptyResult(query, mode) {
+  // Message payloads by result key. Keys are (account, Message-ID), and the
+  // point id is derived from them, so this is the one place that needs the
+  // derivation.
+  async function payloadsFor(keys) {
+    const ids = await Promise.all(
+      keys.map((key) => {
+        const [account, messageId] = key.split('\u0000');
+        return AIOSText.pointId(account, messageId);
+      })
+    );
+    const out = new Map();
+    for (const p of await AIOSQdrant.retrieve(ids)) {
+      const payload = p.payload || {};
+      out.set(keyOf(payload), payload);
+    }
+    return out;
+  }
+
+  function emptyResult(query, mode, latest) {
     return {
       query,
       mode,
       mode_used: mode,
+      latest: !!latest,
       results: [],
       engines: { semantic: { available: true, candidates: 0 }, keyword: { candidates: 0 } },
     };
   }
 
-  // search({query, mode, limit, account, from, to, after, before}) -> the shape
-  // the result cards and the status line read.
+  // search({query, mode, latest, limit, account, from, to, after, before}) ->
+  // the shape the result cards and the status line read.
   async function search(req) {
     const s = req.settings || (await AIOSSettings.get());
     const mode = VALID_MODES.includes(req.mode) ? req.mode : s.mode || 'hybrid';
+    const latest = !!req.latest;
     const query = String(req.query || '').trim();
     const limit = Math.max(1, Math.min(100, req.limit || s.limit || 20));
-    if (!query) return emptyResult(query, mode);
+    if (!query) return emptyResult(query, mode, latest);
 
     const filter = buildFilter(req);
     const candidates = Math.min(100, limit * Math.max(1, s.candidatesMultiplier || 3));
@@ -200,57 +235,54 @@
       }
     }
 
-    let ordered;
-    let modeUsed = mode;
-    if (mode === 'hybrid') {
-      if (!semanticAvailable) modeUsed = 'keyword (semantic unavailable)';
-      ordered = fuse({ semantic: semanticHits, keyword: keywordHits }, s.rrfK || 60);
-    } else if (mode === 'semantic') {
-      ordered = semanticHits.map((h, i) => ({
-        key: h.key,
-        score: h.score,
-        ranks: { semantic: { rank: i + 1, score: h.score } },
-      }));
-    } else {
-      // Keyword ranking is already fused across fields; publish its position as
-      // the engine rank the result cards display, keeping the per-field detail.
-      ordered = keywordHits.map((h, i) => ({
-        key: h.key,
-        score: h.score,
-        ranks: { keyword: { rank: i + 1, score: h.score } },
-        fields: h.ranks,
-      }));
+    // One fusion for every mode: each mode contributes the ranking lists it
+    // actually has, so "Latest" reorders the same pool in all three.
+    const rankings = {};
+    if (mode !== 'semantic') rankings.keyword = keywordHits;
+    if (mode !== 'keyword' && semanticAvailable) rankings.semantic = semanticHits;
+
+    const modeUsed = mode === 'hybrid' && !semanticAvailable ? 'keyword (semantic unavailable)' : mode;
+    let ordered = fuse(rankings, s.rrfK || 60);
+
+    // "Latest" needs the candidates' dates before the top-N slice is taken, so
+    // their payloads are fetched here and reused for the result cards below.
+    let payloads = null;
+    if (latest) {
+      payloads = await payloadsFor(ordered.map((hit) => hit.key));
+      const dates = new Map();
+      for (const [key, payload] of payloads) dates.set(key, payload.date_ms || 0);
+      ordered = latestOrder(ordered, dates);
+    }
+
+    if (mode === 'keyword') {
+      // Keyword ranking is already fused across fields; keep the per-field
+      // detail the result cards display.
+      const fieldsByKey = new Map(keywordHits.map((h) => [h.key, h.ranks]));
+      for (const hit of ordered) if (fieldsByKey.has(hit.key)) hit.fields = fieldsByKey.get(hit.key);
     }
 
     const top = ordered.slice(0, limit);
-    const ids = await Promise.all(
-      top.map((hit) => {
-        const [account, messageId] = hit.key.split('\u0000');
-        return AIOSText.pointId(account, messageId);
-      })
-    );
-    const payloads = new Map();
-    for (const p of await AIOSQdrant.retrieve(ids)) payloads.set(String(p.id), p.payload || {});
+    if (!payloads) payloads = await payloadsFor(top.map((hit) => hit.key));
 
     const results = [];
-    top.forEach((hit, i) => {
-      const payload = payloads.get(String(ids[i]));
-      if (!payload) return; // deleted between the query and the fetch
-      const record = recordOf(payload);
+    for (const hit of top) {
+      const payload = payloads.get(hit.key);
+      if (!payload) continue; // deleted between the query and the fetch
       results.push({
-        ...record,
+        ...recordOf(payload),
         score: hit.score,
         engines: {
           semantic: hit.ranks.semantic || null,
           keyword: hit.ranks.keyword || null,
         },
       });
-    });
+    }
 
     return {
       query,
       mode,
       mode_used: modeUsed,
+      latest,
       results,
       engines: {
         semantic: { available: semanticAvailable, candidates: semanticHits.length },
@@ -259,5 +291,13 @@
     };
   }
 
-  globalThis.AIOSSearch = { search, parseBound, fuse, rankingLists, SemanticUnavailable, buildFilter };
+  globalThis.AIOSSearch = {
+    search,
+    parseBound,
+    fuse,
+    rankingLists,
+    latestOrder,
+    SemanticUnavailable,
+    buildFilter,
+  };
 })();

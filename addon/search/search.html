@@ -43,8 +43,9 @@
         <button data-mode="keyword" class="mode-btn" title="Match words and prefixes (BM25, works without Ollama)">Keyword</button>
       </div>
       <input type="text" id="from-filter" placeholder="from: sender contains" title="Sender contains">
-      <select id="range-preset" title="Quick date range (fills the dates on the right)">
+      <select id="range-preset" title="Quick date range (fills the dates on the right) · Latest keeps every date and ranks the newest matches first">
         <option value="any">Any time</option>
+        <option value="latest">Latest</option>
         <option value="7d">Last 7 days</option>
         <option value="30d">Last 30 days</option>
         <option value="60d">Last 60 days</option>

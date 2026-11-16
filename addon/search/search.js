@@ -44,6 +44,9 @@ async function doSearch() {
   const from = document.getElementById("from-filter").value.trim() || undefined;
   const after = document.getElementById("after-filter").value || undefined;
   const before = document.getElementById("before-filter").value || undefined;
+  // "Latest" lives in the same combobox but is a ranking choice, not a window:
+  // it leaves the dates empty and asks the fusion for a newest-first list.
+  const latest = document.getElementById("range-preset").value === "latest";
   const s = await getSettings();
   const statusEl = document.getElementById("status");
   const resultsEl = document.getElementById("results");
@@ -63,6 +66,7 @@ async function doSearch() {
       from,
       after,
       before,
+      latest,
       settings: s,
     });
 
@@ -89,6 +93,7 @@ function statusLine(data, elapsed, count) {
   if (data.mode === "hybrid" && sem && kw) {
     line += ` (semantic ${sem.candidates}, keyword ${kw.candidates} candidates)`;
   }
+  if (data.latest) line += " · newest first";
   return line;
 }
 
@@ -205,6 +210,10 @@ function daysBack(n) {
 // "custom" is absent on purpose: it leaves the dates the user typed alone.
 const DATE_PRESETS = {
   any: () => ({ after: "", before: "" }),
+  // "Latest" is not a window: it clears the dates (so nothing is filtered by
+  // time) and doSearch asks the ranking to fuse in a newest-first list, so
+  // relevance still decides the top and recency breaks ties.
+  latest: () => ({ after: "", before: "" }),
   // "Last 7 days" includes today, so it starts 6 days back.
   "7d": () => ({ after: ymd(daysBack(6)), before: ymd(startOfToday()) }),
   "30d": () => ({ after: ymd(daysBack(29)), before: ymd(startOfToday()) }),

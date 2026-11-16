@@ -145,8 +145,16 @@ content_hash, indexed_at`.
 Filters on any mode: account dropdown, sender-contains, a quick date range
 (*Any time, Last 7/30/60 days, This week, This month, Last month, This year*, or
 custom) and an after/before date range. The quick ranges just fill the two date
-inputs, so you can see and adjust the exact window they applied. If Ollama is down,
-hybrid silently degrades to keyword-only and says so in the status line.
+inputs, so you can see and adjust the exact window they applied; editing a date
+switches the combobox to *custom*.
+
+**Latest** sits in the same combobox but is a ranking choice, not a window: it
+clears the dates and reorders the results newest first, so the freshest matching
+mail is at the top. Relevance still decides *which* mail is in play — Latest only
+orders the candidate pool the engines returned — and same-day hits keep their
+relevance order. Cards still show their `sem`/`kw` rank, so a message that placed
+poorly on relevance is visibly just that. If Ollama is down, hybrid silently
+degrades to keyword-only and says so in the status line.
 
 Result cards also list the message's **attachment file names** (the first three, then
 `+N more`, with the rest in the tooltip). Names are captured at index time and are not

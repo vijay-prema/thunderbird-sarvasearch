@@ -134,6 +134,84 @@ test('filters become a Qdrant filter with range and text matches', () => {
   assert.strictEqual(range.lt, new Date(2026, 1, 2).getTime());
 });
 
+test('latest orders the relevant candidates newest first', async () => {
+  // Keyword order is a, b, c, d; by date the newest is c, then a, d, b.
+  const dates = { a: '2026-03-02', b: '2026-01-10', c: '2026-03-04', d: '2026-02-01' };
+  const points = await Promise.all(
+    Object.keys(dates).map(async (m) => ({
+      id: await pointIdFor(m),
+      payload: {
+        account: 'acct',
+        message_id: m,
+        subject: m,
+        date_ms: Date.parse(dates[m]),
+      },
+    }))
+  );
+  setup({
+    points,
+    hitsByField: { subject: [hit('a', 9), hit('b', 8), hit('c', 7), hit('d', 6)] },
+  });
+
+  const off = await globalThis.AIOSSearch.search({ query: 'x', mode: 'keyword', limit: 10 });
+  assert.deepStrictEqual(off.results.map((r) => r.message_id), ['a', 'b', 'c', 'd']);
+  assert.strictEqual(off.latest, false);
+
+  const on = await globalThis.AIOSSearch.search({ query: 'x', mode: 'keyword', limit: 10, latest: true });
+  assert.deepStrictEqual(on.results.map((r) => r.message_id), ['c', 'a', 'd', 'b']);
+  assert.strictEqual(on.latest, true);
+  // Relevance is still reported per result, and still picks the pool.
+  assert.ok(on.results.every((r) => r.engines.keyword && r.engines.keyword.rank));
+  assert.strictEqual(on.results.find((r) => r.message_id === 'a').engines.keyword.rank, 1);
+});
+
+test('latest keeps the relevance order for same-date results', async () => {
+  const sameDay = Date.parse('2026-03-01');
+  const points = await Promise.all(
+    ['a', 'b', 'c'].map(async (m) => ({
+      id: await pointIdFor(m),
+      payload: { account: 'acct', message_id: m, subject: m, date_ms: sameDay },
+    }))
+  );
+  setup({ points, hitsByField: { subject: [hit('c', 9), hit('a', 8), hit('b', 7)] } });
+  const res = await globalThis.AIOSSearch.search({ query: 'x', mode: 'keyword', limit: 10, latest: true });
+  assert.deepStrictEqual(res.results.map((r) => r.message_id), ['c', 'a', 'b']);
+});
+
+test('latest puts undated messages last', async () => {
+  const points = await Promise.all(
+    ['old', 'undated', 'new'].map(async (m) => ({
+      id: await pointIdFor(m),
+      payload: {
+        account: 'acct',
+        message_id: m,
+        subject: m,
+        date_ms: m === 'new' ? 2000 : m === 'old' ? 1000 : 0,
+      },
+    }))
+  );
+  setup({
+    points,
+    hitsByField: { subject: [hit('undated', 9), hit('old', 8), hit('new', 7)] },
+  });
+  const res = await globalThis.AIOSSearch.search({ query: 'x', mode: 'keyword', limit: 10, latest: true });
+  assert.deepStrictEqual(res.results.map((r) => r.message_id), ['new', 'old', 'undated']);
+});
+
+test('latest does not change the candidate set, only its order', async () => {
+  const points = await Promise.all(
+    ['a', 'b', 'c'].map(async (m) => ({
+      id: await pointIdFor(m),
+      payload: { account: 'acct', message_id: m, subject: m, date_ms: m === 'a' ? 3000 : 1000 },
+    }))
+  );
+  setup({ points, hitsByField: { subject: [hit('a', 9), hit('b', 8)] } });
+  const res = await globalThis.AIOSSearch.search({ query: 'x', mode: 'keyword', limit: 10, latest: true });
+  // 'c' was never a relevance candidate, so being the search index's newest
+  // point does not let it in.
+  assert.deepStrictEqual(res.results.map((r) => r.message_id).sort(), ['a', 'b']);
+});
+
 test('an empty query returns no results and no calls', async () => {
   const { qdrant } = setup({});
   const before = qdrant.calls.query.length;
