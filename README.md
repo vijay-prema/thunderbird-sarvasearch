@@ -1,18 +1,14 @@
 # SarvaSearch
 
-*Sarva* is Sanskrit for "all" (or "every") — SarvaSearch looks through all of it,
-by meaning or by word.
+*Sarva* is Sanskrit for "all" (or "every") — SarvaSearch looks through all of your
+email accounts, by meaning or by word.
+
+Instant, local, private, and no additional login required.
 
 Hybrid **semantic + keyword** search for Thunderbird, powered entirely by services on
 your own machine. The add-on indexes the mail Thunderbird has already downloaded and
 writes it **straight into Qdrant** — no IMAP connection of its own, and nothing else
 to run.
-
-Built on two MIT-licensed projects: [giovi321/thunderbird-ai-search](https://github.com/giovi321/thunderbird-ai-search)
-(the add-on UI) and [CR0CKER/thunderbird-omnisearch](https://github.com/CR0CKER/thunderbird-omnisearch)
-(folder walking, MIME text extraction, event handling, catch-up/reconcile and
-result-opening logic, adapted from its `lib/`). Attribution is preserved in the file
-headers.
 
 ```mermaid
 flowchart LR
@@ -47,6 +43,8 @@ flowchart LR
 
 ## Why
 
+This search is awesome. You should find that it is far better than the built-in search.
+
 - **Semantic** finds mail by *meaning* ("plumbing invoice" finds "bill for fixing
   the pipes"), using Ollama embeddings stored in Qdrant.
 - **Keyword** finds exact words and word *prefixes* ("invo" finds "invoice"), ranking
@@ -59,10 +57,10 @@ flowchart LR
 
 ## Requirements
 
-- [Thunderbird](https://www.thunderbird.net/) 128+
-- **[Qdrant 1.20 or newer](https://qdrant.tech)** — keyword search uses BM25-scored
+- [Thunderbird](https://www.thunderbird.net/) 128+ (with [download full bodies](#thunderbird-download-full-bodies) enabled on all accounts)
+- [Qdrant 1.20 or newer](https://qdrant.tech) (keyword search uses BM25-scored
   full-text queries, which older versions do not have. The search page warns you if
-  your Qdrant is too old.
+  your Qdrant is too old)
 - [Ollama](https://ollama.ai) with an embedding model:
   `ollama pull nomic-embed-text` (768d, ~274 MB)
 - Nothing else — Docker only if you want it.
@@ -79,7 +77,7 @@ Mail without a downloaded body is still indexed by subject/sender and shown with
 ## Install
 
 ```bash
-./build.sh                      # -> sarvasearch-3.0.0.xpi
+./build.sh                      # -> sarvasearch-x.x.x.xpi
 ```
 
 In Thunderbird: **Tools → Add-ons and Themes → gear → Install Add-on From File**.
@@ -222,6 +220,8 @@ tools/            verify-live.js — drive the add-on's modules against live ser
 ```
 
 ## Credits
+
+Initially built by combining code borrowed from two projects:
 
 - **[giovi321/thunderbird-ai-search](https://github.com/giovi321/thunderbird-ai-search)** (MIT) —
   add-on UI, options page and Ollama embedding semantics.
