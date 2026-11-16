@@ -1,4 +1,9 @@
 // Popup search bar. Submits open the results in a new tab and close the popup.
+// A strip at the bottom mirrors live indexing progress while the popup is
+// open; clicking it opens the search page, whose index panel has the detail
+// (counts, header-only tally, rate and ETA).
+
+let jobPoll = null;
 
 async function openSearch(query) {
   // Resolve to an absolute moz-extension:// URL so the path isn't treated as
@@ -7,6 +12,42 @@ async function openSearch(query) {
   const url = query ? `${base}?q=${encodeURIComponent(query)}` : base;
   await messenger.tabs.create({ url });
   window.close();
+}
+
+const PHASE_SHORT = {
+  building: "Indexing",
+  "catching-up": "Indexing",
+  reconciling: "Verifying",
+};
+
+async function refreshJobStrip() {
+  const strip = document.getElementById("job-strip");
+  if (!strip) return;
+  let s = null;
+  try {
+    s = await messenger.runtime.sendMessage({ type: "getStatus" });
+  } catch (e) {
+    return;
+  }
+  if (!s || (!s.running && s.phase === "idle")) {
+    strip.classList.add("hidden");
+    return;
+  }
+  strip.classList.remove("hidden");
+  const fill = document.getElementById("job-fill");
+  const text = document.getElementById("job-text");
+  const label = PHASE_SHORT[s.phase] || s.phase;
+  if (s.total > 0) {
+    const pct = Math.min(100, Math.floor((s.processed / s.total) * 100));
+    fill.style.width = pct + "%";
+    fill.classList.remove("indeterminate");
+    text.textContent =
+      `${label} ${pct}% · ${s.processed.toLocaleString()} / ${s.total.toLocaleString()}`;
+  } else {
+    fill.style.width = "30%";
+    fill.classList.add("indeterminate");
+    text.textContent = `${label}…`;
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -34,4 +75,8 @@ document.addEventListener("DOMContentLoaded", () => {
     messenger.runtime.openOptionsPage();
     window.close();
   });
+
+  document.getElementById("job-strip").addEventListener("click", () => openSearch(""));
+  refreshJobStrip();
+  jobPoll = setInterval(refreshJobStrip, 2000);
 });

@@ -60,6 +60,8 @@
 
       <div class="management-stats" id="management-stats"></div>
 
+      <div id="job-error" class="job-error hidden"></div>
+
       <div class="management-actions">
         <button id="rebuild-btn" class="btn-secondary"
           title="Walk every folder and push all mail to the server. Already-indexed messages are skipped by content hash, so re-running after a failure resumes where it stopped.">
@@ -71,6 +73,7 @@
 
       <div id="indexer-progress" class="indexer-progress hidden">
         <div class="progress-label" id="progress-label">Indexing...</div>
+        <div class="progress-sub" id="progress-sub"></div>
         <div class="progress-bar">
           <div class="progress-fill" id="progress-fill"></div>
         </div>

@@ -149,7 +149,7 @@ function createResultCard(result, modeUsed) {
       <span class="result-date">${escapeHtml(date)}</span>
     </div>
     <div class="result-tags">
-      <span class="badge badge-account">${escapeHtml(result.account_name || result.account || "")}</span>
+      <span class="badge badge-account">${escapeHtml(accountNameOf(result.account, result.account_name))}</span>
       <span class="badge badge-folder">${escapeHtml(folders)}</span>
       ${flags.join("")}
     </div>
@@ -194,7 +194,33 @@ async function initModeToggle() {
   });
 }
 
-// --- Account filter (straight from Thunderbird, no server roundtrip) ---
+// --- Account filter + name resolution (straight from Thunderbird, no server) ---
+
+// accountId -> display name (account name, else identity email, else id).
+// Results and stats carry the account_name captured at indexing time — which
+// is '' for everything indexed before the extract.js accountName fix — so the
+// page resolves names itself: it has the authoritative list right here.
+const accountNames = new Map();
+
+async function loadAccounts() {
+  try {
+    const accounts = (await messenger.accounts.list(false)) || [];
+    for (const account of accounts) {
+      accountNames.set(
+        account.id,
+        account.name ||
+          (account.identities && account.identities[0] && account.identities[0].email) ||
+          account.id
+      );
+    }
+  } catch (e) {
+    console.warn("Could not list accounts:", e);
+  }
+}
+
+function accountNameOf(accountId, stored) {
+  return accountNames.get(accountId) || stored || accountId || "";
+}
 
 async function loadAccountFilter() {
   const select = document.getElementById("account-filter");
@@ -203,7 +229,7 @@ async function loadAccountFilter() {
     for (const account of accounts) {
       const opt = document.createElement("option");
       opt.value = account.id;
-      opt.textContent = account.name || account.id;
+      opt.textContent = accountNameOf(account.id, account.name);
       select.appendChild(opt);
     }
   } catch (e) {
@@ -247,7 +273,7 @@ async function loadStats() {
       card.className = "account-card";
       card.innerHTML = `
         <div class="account-card-header">
-          <span class="account-name">${escapeHtml(acct.name || acct.account_id)}</span>
+          <span class="account-name">${escapeHtml(accountNameOf(acct.account_id, acct.name))}</span>
         </div>
         <div class="account-details">
           <span>${acct.count.toLocaleString()} messages indexed</span>
@@ -283,30 +309,86 @@ async function verify() {
 }
 
 const PHASE_LABEL = {
-  building: "Rebuilding index",
-  "catching-up": "Catching up on new mail",
+  building: "Indexing",
+  "catching-up": "Indexing",
   reconciling: "Verifying and repairing",
 };
+
+// The job (startedAt) whose management panel we auto-opened, so a running
+// job opens the panel exactly once — the user can still close it.
+let autoOpenedFor = null;
+
+// Progress line parts: counts + header-only flags, and pace + ETA. The rate
+// only kicks in after a few seconds so it is not wild at the start of a job.
+function progressParts(status) {
+  const label = PHASE_LABEL[status.phase] || status.phase;
+  const pct =
+    status.total > 0
+      ? Math.min(100, Math.round((status.processed / status.total) * 100))
+      : null;
+  const counts =
+    status.total > 0
+      ? `${status.processed.toLocaleString()} / ${status.total.toLocaleString()} (${pct}%)`
+      : `${status.processed.toLocaleString()} processed`;
+  const flags = status.headerOnly
+    ? `${status.headerOnly.toLocaleString()} header-only`
+    : "";
+  const headline = [label, counts, flags].filter(Boolean).join(" · ");
+
+  let pace = "";
+  const elapsedMs = status.startedAt ? Date.now() - status.startedAt : 0;
+  if (status.processed > 0 && elapsedMs > 5000) {
+    const rate = Math.round((status.processed / elapsedMs) * 60000);
+    if (rate > 0) {
+      pace = `${rate.toLocaleString()} msgs/min`;
+      if (status.total > status.processed) {
+        const etaMin = Math.round((status.total - status.processed) / rate);
+        pace +=
+          etaMin >= 60
+            ? ` · ~${Math.floor(etaMin / 60)}h ${etaMin % 60}m left`
+            : ` · ~${etaMin}m left`;
+      }
+    }
+  }
+  return { headline, pace };
+}
 
 async function pollStatusOnce() {
   try {
     const status = await bg({ type: "getStatus" });
     if (!status) return;
     if (status.running || status.phase !== "idle") {
+      // A job is running — keep polling even if it was started in the
+      // background (startup/daily catch-up), so the popover progress line
+      // and completion toast actually update.
+      startPollingStatus();
       const progressEl = document.getElementById("indexer-progress");
       progressEl.classList.remove("hidden");
-      const label = document.getElementById("progress-label");
-      const fill = document.getElementById("progress-fill");
-      label.textContent =
-        `${PHASE_LABEL[status.phase] || status.phase}... ` +
-        `(${status.processed.toLocaleString()}/${status.total.toLocaleString()}` +
-        `${status.headerOnly ? `, ${status.headerOnly.toLocaleString()} header-only` : ""})`;
-      const pct = status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
-      fill.style.width = pct + "%";
+      document.getElementById("job-error").classList.add("hidden");
+      // Auto-open the management panel once per job so the bar is visible
+      // without hunting for the toggle (the user can still close it).
+      if (autoOpenedFor !== status.startedAt) {
+        autoOpenedFor = status.startedAt;
+        document.getElementById("management-panel").classList.remove("hidden");
+      }
+      const { headline, pace } = progressParts(status);
+      document.getElementById("progress-label").textContent = headline;
+      document.getElementById("progress-sub").textContent = pace;
+      const pct = status.total > 0 ? Math.min(100, Math.round((status.processed / status.total) * 100)) : 0;
+      document.getElementById("progress-fill").style.width = pct + "%";
     } else {
       stopPollingStatus();
-      if (status.lastError) showToast(`Last job failed: ${status.lastError}`);
-      else if (status.lastResult) showToast(jobSummary(status.lastResult));
+      const errEl = document.getElementById("job-error");
+      if (status.lastError) {
+        // Persistent banner (the toast auto-hides) — hover the toolbar
+        // badge for the same text.
+        errEl.textContent = `Last job failed: ${status.lastError}`;
+        errEl.classList.remove("hidden");
+        showToast(`Last job failed: ${status.lastError}`);
+      } else {
+        errEl.classList.add("hidden");
+        if (status.lastResult) showToast(jobSummary(status.lastResult));
+      }
       loadStats();
       loadHealth();
     }
@@ -425,7 +507,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     messenger.runtime.openOptionsPage();
   });
 
-  document.getElementById("toggle-management").addEventListener("click", async () => {
+  document.getElementById("toggle-management").addEventListener("click", (e) => {
+    e.stopPropagation();
     const panel = document.getElementById("management-panel");
     panel.classList.toggle("hidden");
     if (!panel.classList.contains("hidden")) {
@@ -435,10 +518,25 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  // Popover behaviour: a click outside the panel (or Escape) closes it.
+  document.addEventListener("click", (e) => {
+    const panel = document.getElementById("management-panel");
+    if (panel.classList.contains("hidden")) return;
+    if (panel.contains(e.target)) return;
+    if (e.target.closest("#toggle-management")) return;
+    panel.classList.add("hidden");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      document.getElementById("management-panel").classList.add("hidden");
+    }
+  });
+
   document.getElementById("rebuild-btn").addEventListener("click", rebuild);
   document.getElementById("verify-btn").addEventListener("click", verify);
 
   await initModeToggle();
+  await loadAccounts();
   await loadAccountFilter();
   loadVersion();
 

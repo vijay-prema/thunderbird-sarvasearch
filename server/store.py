@@ -229,6 +229,17 @@ class DocStore:
             )
             self._conn.commit()
 
+    def set_account_name(self, account_id: str, message_id: str, account_name: str) -> None:
+        """Refresh the display name on an existing row (no content change)."""
+        if not account_name:
+            return
+        with self._lock:
+            self._conn.execute(
+                "UPDATE docs SET account_name = ? WHERE account_id = ? AND message_id = ?",
+                (account_name, account_id, message_id),
+            )
+            self._conn.commit()
+
     def remove_folder(
         self, account_id: str, message_id: str, folder: str
     ) -> tuple[str, list[str]]:

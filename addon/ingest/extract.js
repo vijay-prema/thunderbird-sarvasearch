@@ -165,7 +165,7 @@
 
   // headerMeta carries the already-resolved header fields (built on the main
   // thread, since they come off the MessageHeader object): id, headerMessageId,
-  // subject, from, to, date (ms), folderName.
+  // subject, from, to, date (ms), folderName, accountId, accountName.
   function makeDoc(headerMeta, text, available, encrypted) {
     return {
       id: headerMeta.id,
@@ -179,6 +179,7 @@
       date: headerMeta.date || 0,
       folderName: headerMeta.folderName || '',
       accountId: headerMeta.accountId || '',
+      accountName: headerMeta.accountName || '',
       bodyAvailable: available,
     };
   }

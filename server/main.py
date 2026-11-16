@@ -58,6 +58,10 @@ def main():
         level=getattr(logging, config.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+    # httpx logs every request at INFO — during a full index that is two
+    # lines (Ollama embed + Qdrant upsert) per batch on top of uvicorn's
+    # access log. Warnings and errors only.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     logger.info("Thunderbird AI OmniSearch server v%s starting", __version__)
 
@@ -105,6 +109,9 @@ def main():
         host=config.api.host,
         port=config.api.port,
         log_level=config.log_level.lower(),
+        # One access-log line per /ingest request is noise during a full
+        # index (an ingest every few seconds for hours). Errors still log.
+        access_log=False,
     )
 
 

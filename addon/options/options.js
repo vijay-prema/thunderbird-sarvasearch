@@ -107,9 +107,15 @@ async function saveSettings() {
 async function loadHealth() {
   const el = document.getElementById("health-section");
   // Read what is in the form (not necessarily saved yet) so the test
-  // reflects what the user is about to save.
+  // reflects what the user is about to save. An empty URL would fetch a
+  // relative path against moz-extension:// — the "NetworkError" red dot —
+  // so guard it.
   const serverUrl = document.getElementById("server-url").value.trim().replace(/\/+$/, "");
   const apiKey = document.getElementById("api-key").value;
+  if (!serverUrl) {
+    el.innerHTML = `<div class="health-row"><span class="health-dot err"></span>No server URL set</div>`;
+    return;
+  }
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers["X-API-Key"] = apiKey;
   try {
@@ -196,8 +202,12 @@ async function runJob(type, label) {
 
 // --- Init ---
 
-document.addEventListener("DOMContentLoaded", () => {
-  renderSettings();
+document.addEventListener("DOMContentLoaded", async () => {
+  // Fill the form FIRST: loadHealth() reads the URL field, and running it
+  // before the (async) fill read an empty field — fetching a relative
+  // /health against moz-extension:// — which showed a permanent red
+  // "NetworkError" dot even with the server up.
+  await renderSettings();
   loadHealth();
 
   document.getElementById("save-btn").addEventListener("click", saveSettings);

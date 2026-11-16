@@ -45,6 +45,19 @@ def test_changed_body_reembeds(services):
     assert services.embedder.calls == calls + 1
 
 
+def test_reingest_refreshes_account_name_without_embed(services):
+    # Everything indexed before the add-on carried account names has
+    # account_name=''; a re-send of the same content with a name must
+    # backfill it without re-embedding.
+    ingest(services, services.make_doc(account_name=""))
+    calls = services.embedder.calls
+    r = ingest(services, services.make_doc(account_name="Work"))
+    assert r["unchanged"] == 1
+    assert services.embedder.calls == calls
+    row = services.docstore.get("account1", "m1@example.com")
+    assert row["account_name"] == "Work"
+
+
 def test_ollama_rejected_input_indexes_keyword_only(services):
     doc = services.make_doc(body="zzzrejectzzz")
     services.embedder.reject.add(

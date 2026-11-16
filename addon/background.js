@@ -95,6 +95,53 @@
   function setStatus(patch) {
     Object.assign(status, patch);
     persistStatusSoon();
+    updateBadge();
+  }
+
+  // ---- Toolbar button badge: indexing progress at a glance ----
+  // The popup and search page both show live progress, but the badge is the
+  // one indicator visible without opening anything: "42%" while a job runs
+  // (hover the button for counts), "!" if the last job failed, blank idle.
+
+  const PHASE_TITLE = {
+    building: "Indexing",
+    "catching-up": "Indexing",
+    reconciling: "Verifying and repairing",
+  };
+
+  async function updateBadge() {
+    const btn = messenger.browserAction;
+    if (!btn || !btn.setBadgeText) return;
+    try {
+      if (status.running) {
+        if (status.total > 0) {
+          const pct = Math.min(99, Math.floor((status.processed / status.total) * 100));
+          await btn.setBadgeBackgroundColor({ color: "#086A78" });
+          await btn.setBadgeText({ text: `${pct}%` });
+          await btn.setTitle({
+            title:
+              `AI OmniSearch — ${PHASE_TITLE[status.phase] || status.phase}: ` +
+              `${status.processed.toLocaleString()}/${status.total.toLocaleString()} (${pct}%)`,
+          });
+        } else {
+          // No meaningful total yet (catch-up / reconcile): signal activity.
+          await btn.setBadgeBackgroundColor({ color: "#086A78" });
+          await btn.setBadgeText({ text: "•" });
+          await btn.setTitle({
+            title: `AI OmniSearch — ${PHASE_TITLE[status.phase] || status.phase}…`,
+          });
+        }
+      } else if (status.lastError) {
+        await btn.setBadgeBackgroundColor({ color: "#c62828" });
+        await btn.setBadgeText({ text: "!" });
+        await btn.setTitle({ title: `AI OmniSearch — last job failed: ${status.lastError}` });
+      } else {
+        await btn.setBadgeText({ text: "" });
+        await btn.setTitle({ title: "AI OmniSearch" });
+      }
+    } catch (e) {
+      // Badge API unavailable in this build — progress stays in the pages.
+    }
   }
 
   // ---- Jobs ----
@@ -113,15 +160,18 @@
     });
     try {
       const result = await fn();
+      // Flip running BEFORE the idle update: updateBadge() reads it, and
+      // flipping afterwards (a finally) left the badge frozen at the last
+      // percentage of a finished job.
+      status.running = false;
       setStatus({ phase: 'idle', finishedAt: Date.now(), lastResult: result });
       return { started: true, result };
     } catch (e) {
       const msg = String((e && e.message) || e);
       console.error(`[AI OmniSearch] ${phase} failed:`, msg);
+      status.running = false;
       setStatus({ phase: 'idle', finishedAt: Date.now(), lastError: msg });
       return { started: true, error: msg };
-    } finally {
-      status.running = false;
     }
   }
 
@@ -130,21 +180,35 @@
   // hash, so a rebuild resumes where it stopped.
   function fullBuild() {
     return runJob('building', async () => {
+      const startedAt = Date.now();
       const sink = async (docs) => {
         await AIOSClient.ingest(docs);
       };
-      return AIOSReader.fullBuild(extractor, sink, (frac, count, headerOnly, total) => {
+      const result = await AIOSReader.fullBuild(extractor, sink, (frac, count, headerOnly, total) => {
         setStatus({ processed: count, total, headerOnly });
       });
+      // Everything up to the build's start is now indexed: advance the
+      // catch-up watermarks so the next catch-up is O(new mail) instead of
+      // another full walk. Skipped entirely if the build threw.
+      await AIOSEvents.markAllCaughtUp(startedAt);
+      return result;
     });
   }
 
   function catchUp() {
-    return runJob('catching-up', () => AIOSEvents.catchUp());
+    return runJob('catching-up', () =>
+      AIOSEvents.catchUp({}, (processed, total, headerOnly) =>
+        setStatus({ processed, total, headerOnly })
+      )
+    );
   }
 
   function reconcileNow() {
-    return runJob('reconciling', () => AIOSEvents.reconcile());
+    return runJob('reconciling', () =>
+      AIOSEvents.reconcile((processed, total, headerOnly) =>
+        setStatus({ processed, total, headerOnly })
+      )
+    );
   }
 
   async function clearIndex() {
@@ -246,4 +310,5 @@
   });
 
   ensureSpaceRegistered();
+  updateBadge();
 })();

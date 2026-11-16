@@ -104,7 +104,14 @@
     }
     const accounts = (await messenger.accounts.list(false)) || [];
     const map = {};
-    for (const a of accounts) map[a.id] = a.name || a.id;
+    for (const a of accounts) {
+      // Display name, else the identity's email (always present for mail
+      // accounts), else the raw id.
+      map[a.id] =
+        a.name ||
+        (a.identities && a.identities[0] && a.identities[0].email) ||
+        a.id;
+    }
     accountNamesCache = map;
     accountNamesAt = Date.now();
     return map;
@@ -292,8 +299,12 @@
   // every included folder, as docKey -> { account_id, message_id, folders,
   // headerId }. Keyed on the stable identity, not the numeric id (which
   // recycles every session — see dockey.js). Headers only, no body reads.
-  async function collectAllIdentities() {
+  // onProgress(processed, total), reported per folder, drives the UI during
+  // the collection walk (total = summed folder message counts).
+  async function collectAllIdentities(onProgress) {
     const folders = await flattenFolders();
+    const total = onProgress ? await totalMessageCount(folders) : 0;
+    let processed = 0;
     const live = new Map();
     for (const folder of folders) {
       await forEachHeader(folder.id, (header) => {
@@ -305,7 +316,9 @@
           live.set(key, entry);
         }
         if (folder.name) entry.folders.add(folder.name);
+        processed++;
       });
+      if (onProgress) onProgress(processed, total);
     }
     return live;
   }

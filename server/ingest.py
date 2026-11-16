@@ -20,6 +20,7 @@ re-embeds it (wasteful, self-healing).
 import hashlib
 import json
 import logging
+import time
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -32,6 +33,10 @@ from qdrant_client import models as qmodels
 logger = logging.getLogger(__name__)
 
 SNIPPET_LEN = 300
+
+# Log one INFO summary line every N docs stored (new + updated), instead of
+# a line per request — during a full index the requests never stop.
+_LOG_EVERY = 500
 
 
 class IngestDoc(BaseModel):
@@ -96,6 +101,11 @@ class IngestService:
         self.store = store
         self.docstore = docstore
         self._dims = dimensions
+        # Cumulative docs stored (indexed + updated), for the periodic
+        # INFO summary — see _LOG_EVERY.
+        self._stored_total = 0
+        # Last /has heartbeat log time (monotonic) — see has().
+        self._last_has_log = 0.0
 
     # ---- helpers ----
 
@@ -182,6 +192,14 @@ class IngestService:
                 continue
             prior_folders = json.loads(prior["folders"])
             if prior["content_hash"] == chash:
+                # Content unchanged. Refresh the display name if the add-on
+                # now sends one and the stored copy is empty/stale (indexed
+                # before the add-on carried account names) — cheap, and a
+                # rebuild backfills every existing row this way.
+                if doc.account_name and doc.account_name != prior["account_name"]:
+                    self.docstore.set_account_name(
+                        doc.account_id, doc.message_id, doc.account_name
+                    )
                 if doc.folder in prior_folders:
                     result["unchanged"] += 1
                 else:
@@ -220,6 +238,20 @@ class IngestService:
                         result["updated"] += 1
                     else:
                         result["indexed"] += 1
+
+        prev = self._stored_total
+        self._stored_total += result["indexed"] + result["updated"]
+        logger.debug(
+            "ingest: received=%d indexed=%d updated=%d folders_added=%d unchanged=%d embed_failed=%d",
+            result["received"], result["indexed"], result["updated"],
+            result["folders_added"], result["unchanged"], result["embed_failed"],
+        )
+        if self._stored_total // _LOG_EVERY > prev // _LOG_EVERY:
+            logger.info(
+                "indexed %s messages total (last request: %d new, %d updated, %d folders merged)",
+                f"{self._stored_total:,}", result["indexed"], result["updated"],
+                result["folders_added"],
+            )
         return result
 
     # ---- delete / folder ops ----
@@ -298,11 +330,19 @@ class IngestService:
         """Which of these (account_id, message_id) pairs are already indexed?
 
         Used by the add-on's catch-up pass to skip messages it already
-        pushed, before paying for a body read.
+        pushed, before paying for a body read. Logs a throttled heartbeat so
+        a long skip-walk is visible in the (otherwise quiet) server log.
         """
         found = self.docstore.get_many(
             [(i.account_id, i.message_id) for i in items]
         )
+        now = time.monotonic()
+        if now - self._last_has_log > 30:
+            self._last_has_log = now
+            logger.info(
+                "catch-up check: %d known of %d (%d new to read)",
+                len(found), len(items), len(items) - len(found),
+            )
         return [
             {"account_id": a, "message_id": m} for (a, m) in found
         ]

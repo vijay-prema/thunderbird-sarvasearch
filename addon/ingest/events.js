@@ -49,14 +49,21 @@
     };
   }
 
-  // Index one header now (single-message path, main thread). Skips excluded
-  // accounts and Junk/Trash. Server-side dedup makes re-sends cheap.
-  async function upsertHeader(header, opts) {
+  // Whether a header belongs in the index at all (excluded account, or
+  // Junk/Trash the user did not opt in). Checked BEFORE any body read.
+  function shouldIndex(header, opts) {
     const folder = header.folder;
     if (folder) {
       if (opts.excluded && opts.excluded.has(folder.accountId)) return false;
       if (!opts.includeSpamTrash && AIOSReader.isSpamOrTrash(folder)) return false;
     }
+    return true;
+  }
+
+  // Index one header now (single-message path for live events). Server-side
+  // dedup (content hash + deterministic point ids) makes re-sends cheap.
+  async function upsertHeader(header, opts) {
+    if (!shouldIndex(header, opts)) return false;
     const doc = await AIOSReader.headerToDoc(header, opts.indexEncrypted);
     await AIOSClient.ingest([doc]);
     return true;
@@ -163,69 +170,252 @@
 
   // ---- freshness ----
 
+  // Docs per /ingest request during catch-up and reconcile re-ingest. The
+  // single-doc path (one HTTP round trip + one embed call per message) made
+  // a large catch-up ~10x slower than the batched rebuild pipeline.
+  const INGEST_BATCH = 50;
+  // Body reads (messenger.messages.getFull) kept in flight at once during
+  // catch-up. Serial reads capped the walk at a few docs/sec; overlapping
+  // them lifts the new-message rate by roughly this factor.
+  const READ_CONCURRENCY = 8;
+  // A window older than this is effectively the whole mailbox: size it from
+  // folder counts (instant) instead of paginating every header — the
+  // pagination takes minutes on a large mailbox with zero feedback, which
+  // looks exactly like a hung indexer.
+  const ESTIMATE_THRESHOLD_MS = 14 * DAY_MS;
+
+  async function countWindow(account, fromDate) {
+    // Cheap header-only pagination: how many messages the window covers, so
+    // the progress percentage has a real denominator before any body read.
+    let total = 0;
+    let list = await messenger.messages.query({
+      accountId: account.id,
+      fromDate,
+      includeSubFolders: true,
+    });
+    while (list) {
+      total += headersOf(list).length;
+      list = list.id ? await messenger.messages.continueList(list.id) : null;
+    }
+    return total;
+  }
+
+  async function folderTreeTotal(folders) {
+    // Sum getFolderInfo counts over a folder tree — instant, unlike
+    // paginating the headers. Includes Junk/Trash because messages.query
+    // covers them too (shouldIndex filters per header later); the slight
+    // overcount only makes the progress bar conservative.
+    let total = 0;
+    for (const f of folders || []) {
+      try {
+        const info = await messenger.folders.getFolderInfo(f.id);
+        total += (info && info.totalMessageCount) || 0;
+      } catch (e) {
+        /* folder vanished — keep counting the rest */
+      }
+      total += await folderTreeTotal(f.subFolders);
+    }
+    return total;
+  }
+
+  // Run fn over items with at most `n` in flight; resolves in order of
+  // completion. Workers never reject — fn's own try/catch handles its errors.
+  async function mapPool(items, n, fn) {
+    let next = 0;
+    async function worker() {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        await fn(items[i]);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  }
+
   // Index everything newer than each account's watermark. Cost is O(new
   // mail), not O(archive): messages.query bounds the work with fromDate.
   // The /has check skips messages the server already holds BEFORE paying
   // for their body reads (the 1-day overlap would otherwise re-read a day
-  // of mail every run).
-  async function catchUp(opts = {}) {
+  // of mail every run). Docs are ingested in batches, not one per request,
+  // and body reads run READ_CONCURRENCY at a time.
+  // onProgress(processed, total, headerOnly) drives the badge/UI; total is
+  // the message count of the catch-up window across all accounts (folder
+  // counts when the window is whole-mailbox sized — see ESTIMATE_THRESHOLD).
+  async function catchUp(opts = {}, onProgress) {
     const now = opts.now == null ? Date.now() : opts.now;
     const overlapMs = opts.overlapMs == null ? DEFAULT_OVERLAP_MS : opts.overlapMs;
     const indexOptions = await indexOpts();
     const accounts = (await messenger.accounts.list(false)) || [];
-    let scanned = 0;
-    let added = 0;
 
+    // Pass 1: size each account's window. Old/absent watermark (first run,
+    // or pre-batching installs that never finished a full walk): the window
+    // is the whole mailbox — estimate from folder counts, instantly. Recent
+    // watermark: count the (small) window precisely.
+    const accountsVerbose = await messenger.accounts.list(true);
+    const windows = [];
+    let grandTotal = 0;
     for (const account of accounts) {
       if (indexOptions.excluded && indexOptions.excluded.has(account.id)) continue;
       const mark = (await getWatermarks())[account.id] || 0;
-      let newest = mark;
-      let list = await messenger.messages.query({
-        accountId: account.id,
-        fromDate: new Date(Math.max(0, mark - overlapMs)),
-        includeSubFolders: true,
-      });
-
-      while (list) {
-        const headers = headersOf(list);
-        scanned += headers.length;
-
-        // Ask the server before reading: one /has call per page instead of
-        // a getFull body read per message.
-        const known = new Set();
-        if (headers.length) {
-          try {
-            const r = await AIOSClient.has(headers.map(identityOf));
-            for (const k of r.known || []) {
-              known.add(k.account_id + AIOSKey.SEP + k.message_id);
-            }
-          } catch (e) {
-            console.error('[AI OmniSearch] /has check failed:', e);
-          }
+      const fromDate = new Date(Math.max(0, mark - overlapMs));
+      let total;
+      try {
+        if (now - mark > ESTIMATE_THRESHOLD_MS) {
+          const verbose = accountsVerbose.find((a) => a.id === account.id);
+          total = await folderTreeTotal(
+            (verbose && verbose.folders) ||
+              (verbose && verbose.rootFolder && verbose.rootFolder.subFolders)
+          );
+        } else {
+          total = await countWindow(account, fromDate);
         }
-
-        for (const header of headers) {
-          const when = dateMs(header.date);
-          if (when > newest) newest = when;
-          const id = identityOf(header);
-          if (known.has(id.account_id + AIOSKey.SEP + id.message_id)) continue;
-          try {
-            if (await upsertHeader(header, indexOptions)) added++;
-          } catch (e) {
-            console.error('[AI OmniSearch] catch-up ingest failed:', e);
-          }
-        }
-        list = list.id ? await messenger.messages.continueList(list.id) : null;
+      } catch (e) {
+        // Sizing (query/folder info) failed — skip this account entirely
+        // this run; its watermark is untouched, so the next run retries.
+        console.error(
+          '[AI OmniSearch] catch-up sizing failed for account %s — skipping it this run:',
+          account.id, e
+        );
+        continue;
       }
-
-      // Advance even when nothing was found, so a quiet account does not
-      // rescan the same window forever. Never past `now`: a future-dated
-      // message must not push the mark ahead of real time and blind the
-      // next run.
-      await setWatermark(account.id, Math.min(Math.max(newest, mark), now));
+      windows.push({ account, mark, fromDate, total });
+      grandTotal += total;
     }
 
-    return { scanned, added };
+    let scanned = 0;
+    let added = 0;
+    let headerOnly = 0;
+    let lastReport = -Infinity;
+    const report = (force) => {
+      if (!onProgress) return;
+      if (!force && scanned - lastReport < 20) return;
+      lastReport = scanned;
+      onProgress(scanned, grandTotal, headerOnly);
+    };
+    report(true);
+
+    // Pass 2: process each account's window with concurrent body reads and
+    // batched ingest. The per-account walk (query/continueList) is the one
+    // part not individually try/caught — an error there (list token expired,
+    // account offline mid-walk) must kill ONLY this account's pass, not the
+    // whole job: the watermark stays put and the next run retries it.
+    for (const { account, mark, fromDate } of windows) {
+      let newest = mark;
+      let batch = [];
+      let failedBatches = 0;
+      let walkFailed = false;
+      const flush = async (force) => {
+        if (batch.length === 0 || (!force && batch.length < INGEST_BATCH)) return;
+        const docs = batch;
+        batch = [];
+        try {
+          await AIOSClient.ingest(docs);
+        } catch (e) {
+          // The batch is lost for this run — but the watermark below is NOT
+          // advanced when anything failed, so the next run re-walks this
+          // window and /has quickly re-delivers only what is missing.
+          failedBatches++;
+          console.error('[AI OmniSearch] catch-up ingest failed:', e);
+        }
+      };
+
+      try {
+        let list = await messenger.messages.query({
+          accountId: account.id,
+          fromDate,
+          includeSubFolders: true,
+        });
+
+        while (list) {
+          const headers = headersOf(list);
+          for (const header of headers) {
+            const when = dateMs(header.date);
+            if (when > newest) newest = when;
+            scanned++;
+          }
+
+          // Ask the server before reading: one /has call per page instead of
+          // a getFull body read per message.
+          const known = new Set();
+          if (headers.length) {
+            try {
+              const r = await AIOSClient.has(headers.map(identityOf));
+              for (const k of r.known || []) {
+                known.add(k.account_id + AIOSKey.SEP + k.message_id);
+              }
+            } catch (e) {
+              console.error('[AI OmniSearch] /has check failed:', e);
+            }
+          }
+
+          const todo = headers.filter(
+            (header) =>
+              !known.has(identityOf(header).account_id + AIOSKey.SEP + identityOf(header).message_id) &&
+              shouldIndex(header, indexOptions)
+          );
+          if (todo.length) {
+            await mapPool(todo, READ_CONCURRENCY, async (header) => {
+              try {
+                const doc = await AIOSReader.headerToDoc(header, indexOptions.indexEncrypted);
+                if (doc.header_only) headerOnly++;
+                batch.push(doc);
+                added++;
+                await flush(false);
+              } catch (e) {
+                console.error('[AI OmniSearch] catch-up read failed:', e);
+              }
+              report(false);
+            });
+          } else {
+            report(false);
+          }
+          list = list.id ? await messenger.messages.continueList(list.id) : null;
+        }
+        await flush(true);
+      } catch (e) {
+        walkFailed = true;
+        console.error(
+          '[AI OmniSearch] catch-up walk failed for account %s at %d/%d — skipping to next account:',
+          account.id, scanned, grandTotal, e
+        );
+        // Drop anything buffered from the dying account; the un-advanced
+        // watermark re-delivers it next run.
+        batch = [];
+      }
+      report(true);
+
+      // Advance even when nothing was found, so a quiet account does not
+      // rescan the same window forever — but ONLY when every batch made it
+      // AND the walk completed: anything lost must stay behind the mark or
+      // its messages silently disappear from the index until a reconcile.
+      // Never past `now`: a future-dated message must not push the mark
+      // ahead of real time and blind the next run.
+      if (failedBatches === 0 && !walkFailed) {
+        await setWatermark(account.id, Math.min(Math.max(newest, mark), now));
+      } else {
+        console.warn(
+          '[AI OmniSearch] %d ingest batch(es) failed%s for %s — watermark left at %s so the next run retries them',
+          failedBatches, walkFailed ? ' + walk aborted' : '', account.id,
+          new Date(mark).toISOString()
+        );
+      }
+    }
+
+    return { scanned, added, headerOnly };
+  }
+
+  // After a completed full rebuild, everything up to the build's start time
+  // is indexed — advance every included account's watermark to that moment
+  // so the next catch-up is O(new mail) instead of another full walk. Never
+  // called when the build failed (the throw skips it); the catch-up overlap
+  // covers mail that arrived while the build ran.
+  async function markAllCaughtUp(when) {
+    const accounts = (await messenger.accounts.list(false)) || [];
+    const excluded = await AIOSReader.getExcludedAccounts();
+    for (const account of accounts) {
+      if (excluded.has(account.id)) continue;
+      await setWatermark(account.id, when);
+    }
   }
 
   // Deep sweep: compare every live message against the server's index. The
@@ -234,8 +424,14 @@
   // the backstop for the one hole the watermark cannot see — back-dated mail
   // (an old Date header imported or moved in today) lands behind the mark
   // and is invisible to catchUp.
-  async function reconcile() {
-    const live = await AIOSReader.collectAllIdentities();
+  //
+  // Two progress stages, both reported through onProgress(processed, total,
+  // headerOnly): the live-set collection, then the re-ingest of whatever
+  // the server was missing (the total shrinks when the second stage starts).
+  async function reconcile(onProgress) {
+    const live = await AIOSReader.collectAllIdentities(
+      onProgress ? (processed, total) => onProgress(processed, total, 0) : null
+    );
     const liveItems = [...live.values()].map((e) => ({
       account_id: e.account_id,
       message_id: e.message_id,
@@ -243,28 +439,57 @@
     }));
     const r = await AIOSClient.reconcile(liveItems);
 
-    // Re-ingest what the server is missing. headerToDoc does a getFull body
-    // read per message; AIOSClient serializes the writes.
+    // Re-ingest what the server is missing, in batches. headerToDoc does a
+    // getFull body read per message; AIOSClient serializes the writes.
     const opts = await indexOpts();
+    const missing = r.missing || [];
     let added = 0;
-    for (const miss of r.missing || []) {
+    let headerOnly = 0;
+    let batch = [];
+    let done = 0;
+    const flush = async (force) => {
+      if (batch.length === 0 || (!force && batch.length < INGEST_BATCH)) return;
+      const docs = batch;
+      batch = [];
+      try {
+        await AIOSClient.ingest(docs);
+      } catch (e) {
+        // Lost for this run; reconcile makes no watermark promises, so the
+        // next reconcile re-checks and re-delivers what is still missing.
+        console.error('[AI OmniSearch] reconcile ingest failed:', e);
+      }
+    };
+    for (const miss of missing) {
       const entry = live.get(miss.account_id + AIOSKey.SEP + miss.message_id);
-      if (!entry || entry.headerId == null) continue;
+      if (!entry || entry.headerId == null) {
+        done++;
+        continue;
+      }
       let header;
       try {
         header = await messenger.messages.get(Number(entry.headerId));
       } catch (e) {
+        done++;
         continue; // vanished mid-reconcile
       }
-      if (!header) continue;
-      try {
-        if (await upsertHeader(header, opts)) {
+      if (header && shouldIndex(header, opts)) {
+        try {
+          const doc = await AIOSReader.headerToDoc(header, opts.indexEncrypted);
+          if (doc.header_only) headerOnly++;
+          batch.push(doc);
           added++;
+          await flush(false);
+        } catch (e) {
+          console.error('[AI OmniSearch] reconcile re-ingest failed:', e);
         }
-      } catch (e) {
-        console.error('[AI OmniSearch] reconcile re-ingest failed:', e);
+      }
+      done++;
+      if (onProgress && (done % 20 === 0 || done === missing.length)) {
+        onProgress(done, missing.length, headerOnly);
       }
     }
+    await flush(true);
+    if (onProgress) onProgress(done, missing.length, headerOnly);
     return {
       added,
       removed: r.deleted || 0,
@@ -276,6 +501,7 @@
     registerEvents,
     catchUp,
     reconcile,
+    markAllCaughtUp,
     clearWatermarks,
   };
 })();
