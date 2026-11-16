@@ -3,17 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Email Search</title>
+  <title>AI OmniSearch</title>
   <link rel="stylesheet" href="search.css">
 </head>
 <body>
   <header>
     <div class="header-left">
-      <h1>AI Email Search</h1>
+      <h1>AI OmniSearch</h1>
       <span id="version-info" class="version-info" title="Addon and server versions"></span>
     </div>
     <div class="header-right">
-      <button id="toggle-management" class="icon-btn" title="Server Management">
+      <button id="toggle-management" class="icon-btn" title="Index Management">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
           <path d="M10 3a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z"/>
         </svg>
@@ -28,11 +28,23 @@
 
   <main>
     <div class="search-bar">
-      <input type="text" id="search-input" placeholder="Search your emails..." autofocus>
+      <input type="text" id="search-input" placeholder="Search by meaning or keywords..." autofocus>
       <select id="account-filter">
         <option value="">All accounts</option>
       </select>
       <button id="search-btn">Search</button>
+    </div>
+
+    <div class="filter-bar">
+      <div class="mode-toggle" id="mode-toggle" title="How to match your search">
+        <button data-mode="hybrid" class="mode-btn" title="Both engines, rank-fused">Hybrid</button>
+        <button data-mode="semantic" class="mode-btn" title="Match by meaning (Ollama embeddings)">Semantic</button>
+        <button data-mode="keyword" class="mode-btn" title="Match words and prefixes (FTS5, works without Ollama)">Keyword</button>
+      </div>
+      <input type="text" id="from-filter" placeholder="from: sender contains" title="Sender contains">
+      <input type="date" id="after-filter" title="From this date">
+      <span class="date-sep">&ndash;</span>
+      <input type="date" id="before-filter" title="Up to this date">
     </div>
 
     <div id="status" class="status"></div>
@@ -42,12 +54,19 @@
     <!-- Management Panel (hidden by default) -->
     <div id="management-panel" class="management-panel hidden">
       <div class="management-header">
-        <h2>Server Management</h2>
+        <h2>Index Management</h2>
         <div class="health-indicators" id="health-indicators"></div>
       </div>
 
+      <div class="management-stats" id="management-stats"></div>
+
       <div class="management-actions">
-        <button id="reindex-all-btn" class="btn-secondary">Reindex All</button>
+        <button id="rebuild-btn" class="btn-secondary"
+          title="Walk every folder and push all mail to the server. Already-indexed messages are skipped by content hash, so re-running after a failure resumes where it stopped.">
+          Rebuild index</button>
+        <button id="verify-btn" class="btn-secondary"
+          title="Compare the server's index against every live message: deletes stale records, fixes folder drift, and re-ingests anything missing.">
+          Verify and repair</button>
       </div>
 
       <div id="indexer-progress" class="indexer-progress hidden">
@@ -63,6 +82,7 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <script src="../ingest/open.js"></script>
   <script src="search.js"></script>
 </body>
 </html>

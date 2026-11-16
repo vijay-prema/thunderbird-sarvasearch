@@ -444,3 +444,105 @@ main {
   opacity: 0;
   pointer-events: none;
 }
+
+/* Filter bar (mode toggle + from/date filters) */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: -8px 0 16px;
+}
+
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.mode-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--bg);
+  color: var(--text-secondary);
+  border: none;
+  cursor: pointer;
+}
+
+.mode-btn + .mode-btn {
+  border-left: 1px solid var(--border);
+}
+
+.mode-btn.active {
+  background: var(--accent);
+  color: white;
+}
+
+#from-filter {
+  padding: 6px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+  width: 170px;
+}
+
+#from-filter:focus,
+#after-filter:focus,
+#before-filter:focus {
+  border-color: var(--accent);
+}
+
+#after-filter,
+#before-filter {
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+
+.date-sep {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Flags on result cards */
+.badge-flag {
+  background: rgba(245, 127, 23, 0.12);
+  color: var(--warning);
+}
+
+/* Management stat chips */
+.management-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.stat-chip {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.stat-chip.warn {
+  background: rgba(245, 127, 23, 0.12);
+  color: var(--warning);
+}
+
+.management-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}

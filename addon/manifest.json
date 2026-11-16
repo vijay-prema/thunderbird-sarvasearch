@@ -1,23 +1,37 @@
 {
   "manifest_version": 2,
-  "name": "AI Email Search",
-  "description": "Semantic search over your email using local AI",
-  "version": "1.2.2",
-  "author": "Giovanni Crapelli",
+  "name": "Thunderbird AI OmniSearch",
+  "description": "Hybrid semantic + keyword search over your Thunderbird mail, powered by local AI (Ollama + Qdrant). Indexes the mail Thunderbird already downloaded - no IMAP.",
+  "version": "2.0.0",
+  "author": "Vijay Prema",
+  "homepage_url": "https://github.com/vijay-prema/thunderbird-ai-omnisearch",
   "browser_specific_settings": {
     "gecko": {
-      "id": "ai-email-search@giovannicrapelli.com",
+      "id": "ai-omnisearch@vijay-prema.github.io",
       "strict_min_version": "128.0"
     }
   },
   "permissions": [
     "messagesRead",
+    "accountsRead",
     "storage",
+    "alarms",
     "tabs",
-    "<all_urls>"
+    "http://localhost/*"
   ],
+  "background": {
+    "scripts": [
+      "ingest/dockey.js",
+      "ingest/extract.js",
+      "ingest/client.js",
+      "ingest/reader.js",
+      "ingest/open.js",
+      "ingest/events.js",
+      "background.js"
+    ]
+  },
   "browser_action": {
-    "default_title": "AI Email Search",
+    "default_title": "AI OmniSearch",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/search-16.svg",
@@ -29,14 +43,12 @@
       "suggested_key": {
         "default": "Ctrl+Alt+S"
       },
-      "description": "Open AI Email Search"
+      "description": "Open AI OmniSearch"
     }
   },
-  "background": {
-    "scripts": ["background.js"]
-  },
   "options_ui": {
-    "page": "options/options.html"
+    "page": "options/options.html",
+    "open_in_tab": true
   },
   "icons": {
     "16": "icons/search-16.svg",
