@@ -4,9 +4,9 @@
 // indexer (incremental updates) and the extractor worker pool (bulk rebuild),
 // so the CPU-heavy HTML stripping can run off the main thread and across cores.
 //
-// Ported verbatim from CR0CKER/thunderbird-omnisearch (MIT) — its lib/extract.js.
-// Exposes globalThis.OmniExtract — works both as a background script and via
-// importScripts() inside a worker.
+// Ported from CR0CKER/thunderbird-omnisearch (MIT) — its lib/extract.js, global
+// renamed. Exposes globalThis.SarvaExtract — works both as a background script
+// and via importScripts() inside a worker.
 (function () {
   const PREVIEW_LEN = 200;
   // Default cap on indexed body length (chars). Bounds the index size / memory /
@@ -324,7 +324,7 @@
     };
   }
 
-  globalThis.OmniExtract = {
+  globalThis.SarvaExtract = {
     PREVIEW_LEN,
     DEFAULT_MAX_BODY,
     MAX_ATTACHMENT_NAMES,

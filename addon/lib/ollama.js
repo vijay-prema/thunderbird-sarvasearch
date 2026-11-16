@@ -1,5 +1,5 @@
 'use strict';
-// Ollama embedding client. Exposes globalThis.AIOSOllama.
+// Ollama embedding client. Exposes globalThis.SarvaOllama.
 //
 // One rule earns the bisecting code below: Ollama rejects a whole /api/embed
 // request when a single input is unacceptable (a document that is not valid
@@ -10,14 +10,14 @@
   let dimsCache = 0;
 
   async function conn() {
-    const s = await AIOSSettings.get();
-    return { base: AIOSHttp.join(s.ollamaUrl, ''), model: s.ollamaModel, batch: Math.max(1, s.embedBatch || 64) };
+    const s = await SarvaSettings.get();
+    return { base: SarvaHttp.join(s.ollamaUrl, ''), model: s.ollamaModel, batch: Math.max(1, s.embedBatch || 64) };
   }
 
   async function health() {
     try {
       const c = await conn();
-      await AIOSHttp.request(c.base + '/api/tags', { timeoutMs: 8000, retries: 0 });
+      await SarvaHttp.request(c.base + '/api/tags', { timeoutMs: 8000, retries: 0 });
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e.message };
@@ -28,7 +28,7 @@
     const c = await conn();
     // truncate:true asks Ollama itself to cut over-long input at the model's
     // context instead of erroring — the commonest reason a batch fails.
-    const res = await AIOSHttp.json(c.base + '/api/embed', {
+    const res = await SarvaHttp.json(c.base + '/api/embed', {
       model: c.model,
       input: texts,
       truncate: true,
@@ -79,5 +79,5 @@
     return dimsCache;
   }
 
-  globalThis.AIOSOllama = { health, embed, dimensions };
+  globalThis.SarvaOllama = { health, embed, dimensions };
 })();

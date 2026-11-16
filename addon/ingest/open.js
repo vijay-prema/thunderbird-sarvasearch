@@ -1,5 +1,5 @@
 'use strict';
-// Opening a search result. Exposes globalThis.AIOSOpen.
+// Opening a search result. Exposes globalThis.SarvaOpen.
 //
 // Ported from CR0CKER/thunderbird-omnisearch (MIT) — its lib/open.js — with
 // the result fields named for this add-on's record shape
@@ -65,7 +65,7 @@
       }
       return list[0].id;
     } catch (e) {
-      console.error('[AI OmniSearch] could not re-resolve message:', e);
+      console.error('[SarvaSearch] could not re-resolve message:', e);
       return null;
     }
   }
@@ -94,15 +94,15 @@
   async function openMessage(msg, location) {
     const id = await resolveMessageId(msg);
     if (id == null) {
-      console.error('[AI OmniSearch] could not find message', msg.headerMessageId);
+      console.error('[SarvaSearch] could not find message', msg.headerMessageId);
       return false;
     }
     if (!(await tryOpen(id, location))) {
-      console.error('[AI OmniSearch] could not open message', id, msg.headerMessageId);
+      console.error('[SarvaSearch] could not open message', id, msg.headerMessageId);
       return false;
     }
     return true;
   }
 
-  globalThis.AIOSOpen = { resolveMessageId, tryOpen, openMessage };
+  globalThis.SarvaOpen = { resolveMessageId, tryOpen, openMessage };
 })();

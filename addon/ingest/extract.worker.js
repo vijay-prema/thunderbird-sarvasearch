@@ -10,8 +10,8 @@ onmessage = (e) => {
   try {
     const result =
       mode === 'decrypted'
-        ? OmniExtract.buildDecryptedDoc(headerMeta, full, maxBody)
-        : OmniExtract.buildDoc(headerMeta, full, indexEncrypted, maxBody);
+        ? SarvaExtract.buildDecryptedDoc(headerMeta, full, maxBody)
+        : SarvaExtract.buildDoc(headerMeta, full, indexEncrypted, maxBody);
     postMessage({ reqId, ok: true, result });
   } catch (err) {
     postMessage({ reqId, ok: false, error: String((err && err.message) || err) });

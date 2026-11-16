@@ -1,4 +1,4 @@
-// Options page logic for the AI OmniSearch addon.
+// Options page logic for the SarvaSearch addon.
 //
 // Connection settings are the two services the add-on talks to: Qdrant (the
 // index) and Ollama (the embedder). The health check probes those endpoints with
@@ -8,7 +8,7 @@
 let jobPoll = null;
 
 async function loadSettings() {
-  return AIOSSettings.get();
+  return SarvaSettings.get();
 }
 
 async function renderSettings() {
@@ -72,7 +72,7 @@ async function collectSettings() {
   return {
     qdrantUrl: document.getElementById("qdrant-url").value.trim().replace(/\/+$/, ""),
     qdrantApiKey: document.getElementById("qdrant-key").value,
-    collection: document.getElementById("collection").value.trim() || "ai_omnisearch",
+    collection: document.getElementById("collection").value.trim() || "sarvasearch",
     ollamaUrl: document.getElementById("ollama-url").value.trim().replace(/\/+$/, ""),
     ollamaModel: document.getElementById("ollama-model").value.trim() || "nomic-embed-text",
     limit: parseInt(document.getElementById("limit").value, 10) || 20,
@@ -87,9 +87,9 @@ async function collectSettings() {
 
 async function saveSettings() {
   const settings = await collectSettings();
-  await AIOSSettings.save(settings);
+  await SarvaSettings.save(settings);
   // A new endpoint or model means the cached collection state is stale.
-  AIOSIndex.invalidate();
+  SarvaIndex.invalidate();
   const msg = document.getElementById("saved-msg");
   msg.textContent = "Saved";
   setTimeout(() => (msg.textContent = ""), 2000);
@@ -102,7 +102,7 @@ async function loadHealth() {
   const el = document.getElementById("health-section");
   const qdrantUrl = document.getElementById("qdrant-url").value.trim().replace(/\/+$/, "");
   const key = document.getElementById("qdrant-key").value;
-  const collection = document.getElementById("collection").value.trim() || "ai_omnisearch";
+  const collection = document.getElementById("collection").value.trim() || "sarvasearch";
   const ollamaUrl = document.getElementById("ollama-url").value.trim().replace(/\/+$/, "");
   const headers = key ? { "api-key": key } : {};
 
@@ -116,7 +116,7 @@ async function loadHealth() {
 
   let qdrantLine;
   try {
-    const info = await AIOSHttp.request(AIOSHttp.join(qdrantUrl, "/"), { headers, timeoutMs: 8000, retries: 0 });
+    const info = await SarvaHttp.request(SarvaHttp.join(qdrantUrl, "/"), { headers, timeoutMs: 8000, retries: 0 });
     qdrantLine = row("Qdrant", "ok", `v${info.version}`);
   } catch (e) {
     qdrantLine = row("Qdrant", "err", "unreachable");
@@ -124,8 +124,8 @@ async function loadHealth() {
 
   let collectionLine;
   try {
-    const info = await AIOSHttp.request(
-      AIOSHttp.join(qdrantUrl, `/collections/${encodeURIComponent(collection)}`),
+    const info = await SarvaHttp.request(
+      SarvaHttp.join(qdrantUrl, `/collections/${encodeURIComponent(collection)}`),
       { headers, timeoutMs: 8000, retries: 0 }
     );
     collectionLine = row("Index", "ok", `${collection} (${info.result.points_count} points)`);
@@ -135,7 +135,7 @@ async function loadHealth() {
 
   let ollamaLine;
   try {
-    await AIOSHttp.request(AIOSHttp.join(ollamaUrl, "/api/tags"), { timeoutMs: 8000, retries: 0 });
+    await SarvaHttp.request(SarvaHttp.join(ollamaUrl, "/api/tags"), { timeoutMs: 8000, retries: 0 });
     ollamaLine = row("Ollama", "ok", "reachable");
   } catch (e) {
     ollamaLine = row("Ollama", "err", "unreachable — keyword search still works");

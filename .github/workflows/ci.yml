@@ -41,7 +41,7 @@ jobs:
           version=$(jq -r '.version' addon/manifest.json)
           short_sha=$(echo "${GITHUB_SHA}" | cut -c1-7)
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "xpi_name=thunderbird-ai-omnisearch-${version}-${short_sha}.xpi" >> "$GITHUB_OUTPUT"
+          echo "xpi_name=sarvasearch-${version}-${short_sha}.xpi" >> "$GITHUB_OUTPUT"
 
       - name: Build .xpi
         run: |

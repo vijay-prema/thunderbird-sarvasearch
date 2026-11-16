@@ -1,4 +1,7 @@
-# Thunderbird AI OmniSearch
+# SarvaSearch
+
+*Sarva* is Sanskrit for "all" (or "every") — SarvaSearch looks through all of it,
+by meaning or by word.
 
 Hybrid **semantic + keyword** search for Thunderbird, powered entirely by services on
 your own machine. The add-on indexes the mail Thunderbird has already downloaded and
@@ -11,15 +14,35 @@ Built on two MIT-licensed projects: [giovi321/thunderbird-ai-search](https://git
 result-opening logic, adapted from its `lib/`). Attribution is preserved in the file
 headers.
 
-```
-┌────────────────────────────┐
-│ Thunderbird + add-on       │   embed:  POST /api/embed   ┌──────────┐
-│                            │ ──────────────────────────► │  Ollama  │
-│  walk folders (local)      │                             └──────────┘
-│  read bodies (getFull)     │   upsert / query            ┌──────────┐
-│  extract text (workers)    │ ──────────────────────────► │  Qdrant  │
-│  events + daily catch-up   │                             └──────────┘
-└────────────────────────────┘   vectors + payloads + BM25 indexes
+```mermaid
+flowchart LR
+    subgraph TB["Thunderbird + SarvaSearch add-on"]
+        direction TB
+        subgraph BUILD["indexing"]
+            direction LR
+            WALK["walk folders<br/>local mail store"] --> BODY["read bodies<br/>messages.getFull"] --> TEXT["extract text<br/>worker pool"]
+            EVENTS["live events +<br/>daily catch-up"] --> TEXT
+        end
+        PAGE["search page<br/>vector + BM25, RRF-fused"]
+    end
+
+    subgraph SVC["Local services, 127.0.0.1"]
+        direction TB
+        OLLAMA["Ollama :11434<br/>nomic-embed-text"]
+        QDRANT["Qdrant :6333<br/>vectors + payloads<br/>BM25 text indexes"]
+    end
+
+    TEXT -- "POST /api/embed" --> OLLAMA
+    TEXT -- "upsert + content_hash" --> QDRANT
+    PAGE -- "embed the query" --> OLLAMA
+    PAGE -- "vector + BM25 query" --> QDRANT
+
+    classDef build fill:#eaf3f8,stroke:#7fa9bb,color:#123
+    classDef query fill:#fdf1e3,stroke:#c9a06a,color:#123
+    classDef svc fill:#f4f4f4,stroke:#aaa,color:#123
+    class WALK,BODY,TEXT,EVENTS build
+    class PAGE query
+    class OLLAMA,QDRANT svc
 ```
 
 ## Why
@@ -56,20 +79,20 @@ Mail without a downloaded body is still indexed by subject/sender and shown with
 ## Install
 
 ```bash
-./build.sh                      # -> thunderbird-ai-omnisearch-3.0.0.xpi
+./build.sh                      # -> sarvasearch-3.0.0.xpi
 ```
 
 In Thunderbird: **Tools → Add-ons and Themes → gear → Install Add-on From File**.
 For a self-built (unsigned) add-on, first set `xpinstall.signatures.required` to
 `false` in the Config Editor (`about:config`).
 
-Then open **Add-ons → AI OmniSearch → Options** and point it at your services:
+Then open **Add-ons → SarvaSearch → Options** and point it at your services:
 
 | Setting | Default |
 |---|---|
 | Qdrant URL | `http://127.0.0.1:6333` |
 | Qdrant API key | empty |
-| Collection | `ai_omnisearch` |
+| Collection | `sarvasearch` |
 | Ollama URL | `http://127.0.0.1:11434` |
 | Embedding model | `nomic-embed-text` |
 

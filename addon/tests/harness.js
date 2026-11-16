@@ -2,7 +2,7 @@
 // Test harness: loads the add-on's real lib/*.js files into a Node test process
 // and provides fake `messenger`, Qdrant and Ollama.
 //
-// The lib files are browser IIFEs that publish globals (AIOSHttp, AIOSIndex,
+// The lib files are browser IIFEs that publish globals (SarvaHttp, SarvaIndex,
 // ...). Loading the ACTUAL files — rather than re-implementing them in the
 // test — is the point: `node --check` would happily pass a version whose
 // ranking or folder-merge logic is wrong.
@@ -45,7 +45,7 @@ function installMessenger(initial = {}) {
   return globalThis.messenger;
 }
 
-// In-memory Qdrant stand-in. Mirrors the REST surface AIOSIndex/AIOSSearch use.
+// In-memory Qdrant stand-in. Mirrors the REST surface SarvaIndex/SarvaSearch use.
 function fakeQdrant({ points = new Map(), failUpsertWhen = null } = {}) {
   const calls = { upsert: 0, setPayload: 0, delete: 0, query: [], scroll: 0, drop: 0 };
   return {
@@ -143,7 +143,7 @@ function installSettings(overrides = {}) {
     candidatesMultiplier: 3,
     ...overrides,
   };
-  globalThis.AIOSSettings = { get: async () => settings, save: async (p) => ({ ...settings, ...p }), ensure: async () => settings };
+  globalThis.SarvaSettings = { get: async () => settings, save: async (p) => ({ ...settings, ...p }), ensure: async () => settings };
   return settings;
 }
 

@@ -1,5 +1,5 @@
 'use strict';
-// Add-on settings. Exposes globalThis.AIOSSettings.
+// Add-on settings. Exposes globalThis.SarvaSettings.
 //
 // The add-on talks to Qdrant (the index) and Ollama (the embedder) directly,
 // so those two endpoints are the connection settings. Read from storage on
@@ -12,7 +12,7 @@
     // services
     qdrantUrl: 'http://127.0.0.1:6333',
     qdrantApiKey: '',
-    collection: 'ai_omnisearch',
+    collection: 'sarvasearch',
     ollamaUrl: 'http://127.0.0.1:11434',
     ollamaModel: 'nomic-embed-text',
     // search
@@ -66,5 +66,5 @@
     return merged;
   }
 
-  globalThis.AIOSSettings = { DEFAULTS, get, save, ensure, normalise };
+  globalThis.SarvaSettings = { DEFAULTS, get, save, ensure, normalise };
 })();

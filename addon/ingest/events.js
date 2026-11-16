@@ -1,5 +1,5 @@
 'use strict';
-// Keeps the index correct as mail changes. Exposes globalThis.AIOSEvents.
+// Keeps the index correct as mail changes. Exposes globalThis.SarvaEvents.
 //
 // The push surface: all FIVE message events Thunderbird exposes
 // (onNewMailReceived, onUpdated, onDeleted, onMoved, onCopied), each applied
@@ -21,7 +21,7 @@
   // Skew tolerance, not a rescan: mail can land a moment behind the mark, so
   // the catch-up window reaches slightly back.
   const DEFAULT_OVERLAP_MS = DAY_MS;
-  const WATERMARK_KEY = 'aios_watermarks';
+  const WATERMARK_KEY = 'sarvasearch_watermarks';
 
   function dateMs(value) {
     if (!value) return 0;
@@ -34,7 +34,7 @@
   }
 
   function identityOf(header) {
-    return AIOSKey.identity(header);
+    return SarvaKey.identity(header);
   }
 
   function folderNameOf(header) {
@@ -43,9 +43,9 @@
 
   async function indexOpts() {
     return {
-      excluded: await AIOSReader.getExcludedAccounts(),
-      includeSpamTrash: await AIOSReader.getIncludeSpamTrash(),
-      indexEncrypted: await AIOSReader.getIndexEncryptedBodies(),
+      excluded: await SarvaReader.getExcludedAccounts(),
+      includeSpamTrash: await SarvaReader.getIncludeSpamTrash(),
+      indexEncrypted: await SarvaReader.getIndexEncryptedBodies(),
     };
   }
 
@@ -55,7 +55,7 @@
     const folder = header.folder;
     if (folder) {
       if (opts.excluded && opts.excluded.has(folder.accountId)) return false;
-      if (!opts.includeSpamTrash && AIOSReader.isSpamOrTrash(folder)) return false;
+      if (!opts.includeSpamTrash && SarvaReader.isSpamOrTrash(folder)) return false;
     }
     return true;
   }
@@ -64,8 +64,8 @@
   // dedup (content hash + deterministic point ids) makes re-sends cheap.
   async function upsertHeader(header, opts) {
     if (!shouldIndex(header, opts)) return false;
-    const doc = await AIOSReader.headerToDoc(header, opts.indexEncrypted);
-    await AIOSIndex.ingest([doc]);
+    const doc = await SarvaReader.headerToDoc(header, opts.indexEncrypted);
+    await SarvaIndex.ingest([doc]);
     return true;
   }
 
@@ -77,7 +77,7 @@
     try {
       event.addListener(handler);
     } catch (e) {
-      console.error('[AI OmniSearch] event listener registration failed:', e);
+      console.error('[SarvaSearch] event listener registration failed:', e);
     }
   }
 
@@ -90,7 +90,7 @@
         try {
           await upsertHeader(header, opts);
         } catch (e) {
-          console.error('[AI OmniSearch] onNewMailReceived update failed:', e);
+          console.error('[SarvaSearch] onNewMailReceived update failed:', e);
         }
       }
     });
@@ -100,7 +100,7 @@
       try {
         await upsertHeader(message, opts);
       } catch (e) {
-        console.error('[AI OmniSearch] onUpdated update failed:', e);
+        console.error('[SarvaSearch] onUpdated update failed:', e);
       }
     });
 
@@ -108,9 +108,9 @@
       const items = headersOf(messageList).map(identityOf);
       if (!items.length) return;
       try {
-        await AIOSIndex.deleteMessages(items);
+        await SarvaIndex.deleteMessages(items);
       } catch (e) {
-        console.error('[AI OmniSearch] onDeleted update failed:', e);
+        console.error('[SarvaSearch] onDeleted update failed:', e);
       }
     });
 
@@ -125,16 +125,16 @@
         .filter((r) => r.folder);
       if (removals.length) {
         try {
-          await AIOSIndex.removeFolder(removals);
+          await SarvaIndex.removeFolder(removals);
         } catch (e) {
-          console.error('[AI OmniSearch] onMoved folder-remove failed:', e);
+          console.error('[SarvaSearch] onMoved folder-remove failed:', e);
         }
       }
       for (const header of headersOf(movedMessages)) {
         try {
           await upsertHeader(header, opts);
         } catch (e) {
-          console.error('[AI OmniSearch] onMoved update failed:', e);
+          console.error('[SarvaSearch] onMoved update failed:', e);
         }
       }
     });
@@ -145,7 +145,7 @@
         try {
           await upsertHeader(header, opts);
         } catch (e) {
-          console.error('[AI OmniSearch] onCopied update failed:', e);
+          console.error('[SarvaSearch] onCopied update failed:', e);
         }
       }
     });
@@ -273,7 +273,7 @@
         // Sizing (query/folder info) failed — skip this account entirely
         // this run; its watermark is untouched, so the next run retries.
         console.error(
-          '[AI OmniSearch] catch-up sizing failed for account %s — skipping it this run:',
+          '[SarvaSearch] catch-up sizing failed for account %s — skipping it this run:',
           account.id, e
         );
         continue;
@@ -309,13 +309,13 @@
         const docs = batch;
         batch = [];
         try {
-          await AIOSIndex.ingest(docs);
+          await SarvaIndex.ingest(docs);
         } catch (e) {
           // The batch is lost for this run — but the watermark below is NOT
           // advanced when anything failed, so the next run re-walks this
           // window and /has quickly re-delivers only what is missing.
           failedBatches++;
-          console.error('[AI OmniSearch] catch-up ingest failed:', e);
+          console.error('[SarvaSearch] catch-up ingest failed:', e);
         }
       };
 
@@ -339,30 +339,30 @@
           const known = new Set();
           if (headers.length) {
             try {
-              const r = { known: await AIOSIndex.known(headers.map(identityOf)) };
+              const r = { known: await SarvaIndex.known(headers.map(identityOf)) };
               for (const k of r.known || []) {
-                known.add(k.account_id + AIOSKey.SEP + k.message_id);
+                known.add(k.account_id + SarvaKey.SEP + k.message_id);
               }
             } catch (e) {
-              console.error('[AI OmniSearch] /has check failed:', e);
+              console.error('[SarvaSearch] /has check failed:', e);
             }
           }
 
           const todo = headers.filter(
             (header) =>
-              !known.has(identityOf(header).account_id + AIOSKey.SEP + identityOf(header).message_id) &&
+              !known.has(identityOf(header).account_id + SarvaKey.SEP + identityOf(header).message_id) &&
               shouldIndex(header, indexOptions)
           );
           if (todo.length) {
             await mapPool(todo, READ_CONCURRENCY, async (header) => {
               try {
-                const doc = await AIOSReader.headerToDoc(header, indexOptions.indexEncrypted);
+                const doc = await SarvaReader.headerToDoc(header, indexOptions.indexEncrypted);
                 if (doc.header_only) headerOnly++;
                 batch.push(doc);
                 added++;
                 await flush(false);
               } catch (e) {
-                console.error('[AI OmniSearch] catch-up read failed:', e);
+                console.error('[SarvaSearch] catch-up read failed:', e);
               }
               report(false);
             });
@@ -375,7 +375,7 @@
       } catch (e) {
         walkFailed = true;
         console.error(
-          '[AI OmniSearch] catch-up walk failed for account %s at %d/%d — skipping to next account:',
+          '[SarvaSearch] catch-up walk failed for account %s at %d/%d — skipping to next account:',
           account.id, scanned, grandTotal, e
         );
         // Drop anything buffered from the dying account; the un-advanced
@@ -394,7 +394,7 @@
         await setWatermark(account.id, Math.min(Math.max(newest, mark), now));
       } else {
         console.warn(
-          '[AI OmniSearch] %d ingest batch(es) failed%s for %s — watermark left at %s so the next run retries them',
+          '[SarvaSearch] %d ingest batch(es) failed%s for %s — watermark left at %s so the next run retries them',
           failedBatches, walkFailed ? ' + walk aborted' : '', account.id,
           new Date(mark).toISOString()
         );
@@ -411,7 +411,7 @@
   // covers mail that arrived while the build ran.
   async function markAllCaughtUp(when) {
     const accounts = (await messenger.accounts.list(false)) || [];
-    const excluded = await AIOSReader.getExcludedAccounts();
+    const excluded = await SarvaReader.getExcludedAccounts();
     for (const account of accounts) {
       if (excluded.has(account.id)) continue;
       await setWatermark(account.id, when);
@@ -429,7 +429,7 @@
   // headerOnly): the live-set collection, then the re-ingest of whatever
   // the index was missing (the total shrinks when the second stage starts).
   async function reconcile(onProgress) {
-    const live = await AIOSReader.collectAllIdentities(
+    const live = await SarvaReader.collectAllIdentities(
       onProgress ? (processed, total) => onProgress(processed, total, 0) : null
     );
     const liveItems = [...live.values()].map((e) => ({
@@ -437,10 +437,10 @@
       message_id: e.message_id,
       folders: [...e.folders],
     }));
-    const r = await AIOSIndex.reconcile(liveItems);
+    const r = await SarvaIndex.reconcile(liveItems);
 
     // Re-ingest what the index is missing, in batches. headerToDoc does a
-    // getFull body read per message; AIOSIndex serializes the writes.
+    // getFull body read per message; SarvaIndex serializes the writes.
     const opts = await indexOpts();
     const missing = r.missing || [];
     let added = 0;
@@ -452,15 +452,15 @@
       const docs = batch;
       batch = [];
       try {
-        await AIOSIndex.ingest(docs);
+        await SarvaIndex.ingest(docs);
       } catch (e) {
         // Lost for this run; reconcile makes no watermark promises, so the
         // next reconcile re-checks and re-delivers what is still missing.
-        console.error('[AI OmniSearch] reconcile ingest failed:', e);
+        console.error('[SarvaSearch] reconcile ingest failed:', e);
       }
     };
     for (const miss of missing) {
-      const entry = live.get(miss.account_id + AIOSKey.SEP + miss.message_id);
+      const entry = live.get(miss.account_id + SarvaKey.SEP + miss.message_id);
       if (!entry || entry.headerId == null) {
         done++;
         continue;
@@ -474,13 +474,13 @@
       }
       if (header && shouldIndex(header, opts)) {
         try {
-          const doc = await AIOSReader.headerToDoc(header, opts.indexEncrypted);
+          const doc = await SarvaReader.headerToDoc(header, opts.indexEncrypted);
           if (doc.header_only) headerOnly++;
           batch.push(doc);
           added++;
           await flush(false);
         } catch (e) {
-          console.error('[AI OmniSearch] reconcile re-ingest failed:', e);
+          console.error('[SarvaSearch] reconcile re-ingest failed:', e);
         }
       }
       done++;
@@ -497,7 +497,7 @@
     };
   }
 
-  globalThis.AIOSEvents = {
+  globalThis.SarvaEvents = {
     registerEvents,
     catchUp,
     reconcile,

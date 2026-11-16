@@ -1,5 +1,5 @@
 'use strict';
-// Text + identity primitives. Exposes globalThis.AIOSText.
+// Text + identity primitives. Exposes globalThis.SarvaText.
 //
 // Three conversions happen here, and all three are load-bearing — change one
 // and every stored point stops matching:
@@ -93,7 +93,7 @@
     return body.slice(0, max || 200);
   }
 
-  globalThis.AIOSText = {
+  globalThis.SarvaText = {
     repair,
     repairDoc,
     embedText,

@@ -1,8 +1,8 @@
-// Search page logic for the AI OmniSearch addon.
+// Search page logic for the SarvaSearch addon.
 //
-// Runs the search itself (AIOSSearch -> Qdrant, with Ollama embedding the
+// Runs the search itself (SarvaSearch -> Qdrant, with Ollama embedding the
 // query) and asks the background script only for index status and job
-// triggers. Opening a result goes through AIOSOpen (ingest/open.js), which
+// triggers. Opening a result goes through SarvaOpen (ingest/open.js), which
 // resolves the stable Message-ID to the live message before opening it.
 
 let pollInterval = null;
@@ -16,11 +16,11 @@ const MODE_LABEL = {
 // Settings live in lib/settings.js; these are the only two accessors the page
 // needs, kept as thin wrappers so the rest of the file reads unchanged.
 function getSettings() {
-  return AIOSSettings.get();
+  return SarvaSettings.get();
 }
 
 function saveSettings(patch) {
-  return AIOSSettings.save(patch);
+  return SarvaSettings.save(patch);
 }
 
 // Ask the background script (it owns the pipeline state).
@@ -58,7 +58,7 @@ async function doSearch() {
   const startTime = performance.now();
 
   try {
-    const data = await AIOSSearch.search({
+    const data = await SarvaSearch.search({
       query,
       mode,
       limit: s.limit || 20,
@@ -171,7 +171,7 @@ function attachmentsHtml(result) {
 
 async function openEmail(result) {
   const s = await getSettings();
-  const ok = await AIOSOpen.openMessage(
+  const ok = await SarvaOpen.openMessage(
     {
       headerMessageId: (result.message_id || "").replace(/^<|>$/g, ""),
       numeric_id: result.numeric_id != null ? Number(result.numeric_id) : null,
@@ -327,7 +327,7 @@ async function loadAccountFilter() {
 
 async function loadHealth() {
   const el = document.getElementById("health-indicators");
-  const data = await AIOSIndex.health();
+  const data = await SarvaIndex.health();
   const indexState = data.collection === "green" || data.collection === "yellow" ? "ok" : data.collection;
   const items = [
     ["Qdrant", data.qdrant],
@@ -343,7 +343,7 @@ async function loadStats() {
   const el = document.getElementById("management-stats");
   const cards = document.getElementById("account-cards");
   try {
-    const stats = await AIOSIndex.stats();
+    const stats = await SarvaIndex.stats();
     el.innerHTML = `
       <div class="stat-chip">${stats.total_emails.toLocaleString()} indexed</div>
       ${stats.header_only ? `<div class="stat-chip warn">${stats.header_only.toLocaleString()} header-only</div>` : ""}
@@ -519,7 +519,7 @@ async function loadVersion() {
   el.classList.remove("mismatch");
   el.title = `Addon v${clientVersion}`;
   try {
-    const qdrant = await AIOSQdrant.version();
+    const qdrant = await SarvaQdrant.version();
     el.textContent = `addon v${clientVersion} · qdrant v${qdrant}`;
     el.title = `Addon v${clientVersion} · Qdrant v${qdrant}`;
     // BM25 text queries need Qdrant 1.20 or newer; keyword search silently

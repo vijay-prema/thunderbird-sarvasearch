@@ -1,17 +1,17 @@
 'use strict';
-// Orchestrator. Drives the ingestion pipeline (mail reads via AIOSReader,
-// extraction in the worker pool, embedding + upload via AIOSIndex), keeps the
-// index fresh via AIOSEvents (live events + daily catch-up), and answers the
+// Orchestrator. Drives the ingestion pipeline (mail reads via SarvaReader,
+// extraction in the worker pool, embedding + upload via SarvaIndex), keeps the
+// index fresh via SarvaEvents (live events + daily catch-up), and answers the
 // UI pages over runtime messages.
 //
 // The worker-pool RPC is ported from CR0CKER/thunderbird-omnisearch (MIT) —
 // its background.js — with its engine worker replaced by the Qdrant index.
-// Depends on the globals AIOSSettings, AIOSKey, AIOSIndex, OmniExtract,
-// AIOSReader, AIOSOpen, AIOSEvents (load order is set in manifest.json).
+// Depends on the globals SarvaSettings, SarvaKey, SarvaIndex, SarvaExtract,
+// SarvaReader, SarvaOpen, SarvaEvents (load order is set in manifest.json).
 (function () {
   const SEARCH_URL = 'search/search.html';
-  const SPACE_NAME = 'ai_omnisearch';
-  const ALARM = 'aios-catchup';
+  const SPACE_NAME = 'sarvasearch';
+  const ALARM = 'sarva-catchup';
   const ALARM_PERIOD_MIN = 1440; // daily
 
 
@@ -30,7 +30,7 @@
       if (ok) resolver.resolve(result);
       else resolver.reject(new Error(error));
     };
-    w.onerror = (e) => console.error('[AI OmniSearch] worker error:', e.message || e);
+    w.onerror = (e) => console.error('[SarvaSearch] worker error:', e.message || e);
     return function post(payload) {
       const reqId = nextReqId++;
       return new Promise((resolve, reject) => {
@@ -94,7 +94,7 @@
   // constant label — job state lives in the badge, the popup strip and the
   // search page, never in the title bar.
 
-  const BTN_TITLE = 'AI OmniSearch';
+  const BTN_TITLE = 'SarvaSearch';
   let btnTitleSet = false;
 
   // Every badge setter is an async IPC round trip, so progress ticks used to
@@ -183,7 +183,7 @@
       return { started: true, result };
     } catch (e) {
       const msg = String((e && e.message) || e);
-      console.error(`[AI OmniSearch] ${phase} failed:`, msg);
+      console.error(`[SarvaSearch] ${phase} failed:`, msg);
       status.running = false;
       setStatus({ phase: 'idle', finishedAt: Date.now(), lastError: msg });
       return { started: true, error: msg };
@@ -201,23 +201,23 @@
       // the UI so the skip is not silent.
       let failed = 0;
       const sink = async (docs) => {
-        const r = await AIOSIndex.ingest(docs);
+        const r = await SarvaIndex.ingest(docs);
         if (r && r.failed) failed += r.failed;
       };
-      const result = await AIOSReader.fullBuild(extractor, sink, (frac, count, headerOnly, total) => {
+      const result = await SarvaReader.fullBuild(extractor, sink, (frac, count, headerOnly, total) => {
         setStatus({ processed: count, total, headerOnly });
       });
       // Everything up to the build's start is now indexed: advance the
       // catch-up watermarks so the next catch-up is O(new mail) instead of
       // another full walk. Skipped entirely if the build threw.
-      await AIOSEvents.markAllCaughtUp(startedAt);
+      await SarvaEvents.markAllCaughtUp(startedAt);
       return failed ? { ...result, failed } : result;
     });
   }
 
   function catchUp() {
     return runJob('catching-up', () =>
-      AIOSEvents.catchUp({}, (processed, total, headerOnly) =>
+      SarvaEvents.catchUp({}, (processed, total, headerOnly) =>
         setStatus({ processed, total, headerOnly })
       )
     );
@@ -225,15 +225,15 @@
 
   function reconcileNow() {
     return runJob('reconciling', () =>
-      AIOSEvents.reconcile((processed, total, headerOnly) =>
+      SarvaEvents.reconcile((processed, total, headerOnly) =>
         setStatus({ processed, total, headerOnly })
       )
     );
   }
 
   async function clearIndex() {
-    await AIOSIndex.clear();
-    await AIOSEvents.clearWatermarks();
+    await SarvaIndex.clear();
+    await SarvaEvents.clearWatermarks();
     setStatus({ lastError: null, lastResult: { cleared: true }, finishedAt: Date.now() });
     return { cleared: true };
   }
@@ -260,14 +260,14 @@
 
   // ---- Live updates, alarms, first run ----
 
-  AIOSEvents.registerEvents();
+  SarvaEvents.registerEvents();
 
   async function ensureAlarm() {
     try {
       await messenger.alarms.clear(ALARM);
       await messenger.alarms.create(ALARM, { periodInMinutes: ALARM_PERIOD_MIN });
     } catch (e) {
-      console.error('[AI OmniSearch] alarm setup failed:', e);
+      console.error('[SarvaSearch] alarm setup failed:', e);
     }
   }
 
@@ -280,7 +280,7 @@
     if (!messenger.spaces || !messenger.spaces.create) return;
     try {
       await messenger.spaces.create(SPACE_NAME, SEARCH_URL, {
-        title: 'AI OmniSearch',
+        title: 'SarvaSearch',
         defaultIcons: {
           16: 'icons/search-16.svg',
           32: 'icons/search-32.svg',
@@ -293,7 +293,7 @@
 
   async function ensureDefaultSettings() {
     // Writes the defaults on first run.
-    await AIOSSettings.ensure();
+    await SarvaSettings.ensure();
   }
 
   // First run (or an empty index): a full build; otherwise just catch up.
@@ -301,14 +301,14 @@
   // page and can hit Rebuild once it is up.
   async function firstRun() {
     try {
-      const stats = await AIOSIndex.stats();
+      const stats = await SarvaIndex.stats();
       if (!stats || !stats.total_emails) {
         fullBuild();
       } else {
         catchUp();
       }
     } catch (e) {
-      console.warn('[AI OmniSearch] index unreachable on startup:', e);
+      console.warn('[SarvaSearch] index unreachable on startup:', e);
     }
   }
 

@@ -1,5 +1,5 @@
 {
-  "name": "thunderbird-ai-omnisearch",
+  "name": "sarvasearch",
   "version": "3.0.0",
   "private": true,
   "description": "Thunderbird add-on: hybrid semantic + keyword search over your own mail, indexed straight into Qdrant",

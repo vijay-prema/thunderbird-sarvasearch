@@ -1,6 +1,6 @@
 'use strict';
 // The index itself: ingest, freshness bookkeeping, repairs. Exposes
-// globalThis.AIOSIndex.
+// globalThis.SarvaIndex.
 //
 // Qdrant is the whole store: a message's point carries its payload, so the
 // content hash and folder list live next to the vector and every rule below is
@@ -16,7 +16,7 @@
 // but not re-sent on every pass either.
 (function () {
   const SNIPPET_LEN = 200;
-  const FAIL_KEY = 'aios_embed_failures';
+  const FAIL_KEY = 'sarvasearch_embed_failures';
   const FAIL_MAX = 500;
   const UPSERT_BATCH = 100;
   const SCROLL_BATCH = 1000;
@@ -51,7 +51,7 @@
       date: doc.date || '',
       date_ms: doc.date_ms || 0,
       folders,
-      snippet: doc.snippet || AIOSText.snippetOf(doc, SNIPPET_LEN),
+      snippet: doc.snippet || SarvaText.snippetOf(doc, SNIPPET_LEN),
       body: doc.body || '',
       header_only: !!doc.header_only,
       encrypted: !!doc.encrypted,
@@ -81,8 +81,8 @@
 
   async function ensureReady() {
     if (ready) return;
-    const dims = await AIOSOllama.dimensions();
-    await AIOSQdrant.ensure(dims);
+    const dims = await SarvaOllama.dimensions();
+    await SarvaQdrant.ensure(dims);
     ready = true;
   }
 
@@ -96,24 +96,24 @@
   // retry each point alone so one poison payload cannot lose the other 99.
   async function upsertIsolated(points, result) {
     try {
-      await AIOSQdrant.upsert(points);
+      await SarvaQdrant.upsert(points);
       return;
     } catch (e) {
       if (points.length === 1) {
         result.failed += 1;
-        console.warn('[AI OmniSearch] skipped a message the index rejected:', e.message);
+        console.warn('[SarvaSearch] skipped a message the index rejected:', e.message);
         return;
       }
     }
     let failures = 0;
     for (const point of points) {
       try {
-        await AIOSQdrant.upsert([point]);
+        await SarvaQdrant.upsert([point]);
       } catch (e) {
         failures += 1;
         result.failed += 1;
         console.warn(
-          '[AI OmniSearch] skipped %s / %s: %s',
+          '[SarvaSearch] skipped %s / %s: %s',
           point.payload.account,
           point.payload.message_id,
           e.message
@@ -125,7 +125,7 @@
 
   async function ingest(rawDocs) {
     await ensureReady();
-    const docs = (rawDocs || []).map(AIOSText.repairDoc);
+    const docs = (rawDocs || []).map(SarvaText.repairDoc);
     const result = {
       received: docs.length,
       indexed: 0,
@@ -137,10 +137,10 @@
     };
     if (!docs.length) return result;
 
-    const ids = await Promise.all(docs.map((d) => AIOSText.pointId(d.account_id, d.message_id)));
-    const prior = await AIOSQdrant.retrieve(ids);
+    const ids = await Promise.all(docs.map((d) => SarvaText.pointId(d.account_id, d.message_id)));
+    const prior = await SarvaQdrant.retrieve(ids);
     const priorByKey = new Map(prior.map((p) => [keyOf(p.payload || {}), p.payload || {}]));
-    const hashes = await Promise.all(docs.map((d) => AIOSText.contentHash(payloadView(d))));
+    const hashes = await Promise.all(docs.map((d) => SarvaText.contentHash(payloadView(d))));
     const failures = await loadFailures();
 
     const jobs = []; // {doc, id, hash, folders}
@@ -200,9 +200,9 @@
     // ---- metadata writes, grouped by identical patch ----
     for (const { payload, ids: group } of patches.values()) {
       try {
-        await AIOSQdrant.setPayload(group, payload);
+        await SarvaQdrant.setPayload(group, payload);
       } catch (e) {
-        console.warn('[AI OmniSearch] metadata update failed for %d message(s): %s', group.length, e.message);
+        console.warn('[SarvaSearch] metadata update failed for %d message(s): %s', group.length, e.message);
       }
     }
 
@@ -218,8 +218,8 @@
 
       const points = [];
       if (attempt.length) {
-        const texts = attempt.map((j) => AIOSText.embedText(payloadView(j.doc)));
-        const vectors = await AIOSOllama.embed(texts);
+        const texts = attempt.map((j) => SarvaText.embedText(payloadView(j.doc)));
+        const vectors = await SarvaOllama.embed(texts);
 
         attempt.forEach((job, i) => {
           const vector = vectors[i];
@@ -256,8 +256,8 @@
   // catch-up to skip a body read per message.
   async function known(items) {
     if (!items || !items.length) return [];
-    const ids = await Promise.all(items.map((i) => AIOSText.pointId(i.account_id, i.message_id)));
-    const found = await AIOSQdrant.retrieve(ids);
+    const ids = await Promise.all(items.map((i) => SarvaText.pointId(i.account_id, i.message_id)));
+    const found = await SarvaQdrant.retrieve(ids);
     return found
       .map((p) => p.payload || {})
       .filter((p) => p.account && p.message_id)
@@ -266,11 +266,11 @@
 
   async function stats() {
     const zero = { total_emails: 0, header_only: 0, encrypted: 0, qdrant_points: 0, accounts: [] };
-    if (!(await AIOSQdrant.exists())) return zero;
-    const total = await AIOSQdrant.count();
-    const headerOnly = await AIOSQdrant.count({ must: [{ key: 'header_only', match: { value: true } }] });
-    const encrypted = await AIOSQdrant.count({ must: [{ key: 'encrypted', match: { value: true } }] });
-    const hits = await AIOSQdrant.facet('account', 100);
+    if (!(await SarvaQdrant.exists())) return zero;
+    const total = await SarvaQdrant.count();
+    const headerOnly = await SarvaQdrant.count({ must: [{ key: 'header_only', match: { value: true } }] });
+    const encrypted = await SarvaQdrant.count({ must: [{ key: 'encrypted', match: { value: true } }] });
+    const hits = await SarvaQdrant.facet('account', 100);
     return {
       total_emails: total,
       header_only: headerOnly,
@@ -281,11 +281,11 @@
   }
 
   async function health() {
-    const [qdrant, ollama] = await Promise.all([AIOSQdrant.health(), AIOSOllama.health()]);
+    const [qdrant, ollama] = await Promise.all([SarvaQdrant.health(), SarvaOllama.health()]);
     let collection = 'missing';
     if (qdrant.ok) {
       try {
-        const info = await AIOSQdrant.collectionInfo();
+        const info = await SarvaQdrant.collectionInfo();
         collection = (info && info.result && info.result.status) || 'unknown';
       } catch (e) {
         collection = 'missing';
@@ -304,8 +304,8 @@
   async function deleteMessages(items) {
     const list = items || [];
     if (!list.length) return 0;
-    const ids = await Promise.all(list.map((i) => AIOSText.pointId(i.account_id, i.message_id)));
-    await AIOSQdrant.deletePoints(ids);
+    const ids = await Promise.all(list.map((i) => SarvaText.pointId(i.account_id, i.message_id)));
+    await SarvaQdrant.deletePoints(ids);
     return ids.length;
   }
 
@@ -315,9 +315,9 @@
     const result = { deleted: 0, updated: 0, missing: 0 };
     const list = items || [];
     if (!list.length) return result;
-    const ids = await Promise.all(list.map((i) => AIOSText.pointId(i.account_id, i.message_id)));
+    const ids = await Promise.all(list.map((i) => SarvaText.pointId(i.account_id, i.message_id)));
     const found = new Map();
-    for (const p of await AIOSQdrant.retrieve(ids)) found.set(p.id, p.payload || {});
+    for (const p of await SarvaQdrant.retrieve(ids)) found.set(p.id, p.payload || {});
 
     const toDelete = [];
     const patches = new Map();
@@ -340,8 +340,8 @@
       result.updated += 1;
     });
 
-    if (toDelete.length) await AIOSQdrant.deletePoints(toDelete);
-    for (const { payload, ids: group } of patches.values()) await AIOSQdrant.setPayload(group, payload);
+    if (toDelete.length) await SarvaQdrant.deletePoints(toDelete);
+    for (const { payload, ids: group } of patches.values()) await SarvaQdrant.setPayload(group, payload);
     return result;
   }
 
@@ -354,7 +354,7 @@
     for (;;) {
       const body = { limit: SCROLL_BATCH, with_payload: ['account', 'message_id', 'folders'], with_vector: false };
       if (offset != null) body.offset = offset;
-      const res = await AIOSQdrant.scroll(body);
+      const res = await SarvaQdrant.scroll(body);
       const page = (res && res.result) || {};
       for (const p of page.points || []) {
         const pl = p.payload || {};
@@ -400,10 +400,10 @@
 
     if (toDelete.length) {
       for (let i = 0; i < toDelete.length; i += 500) {
-        await AIOSQdrant.deletePoints(toDelete.slice(i, i + 500));
+        await SarvaQdrant.deletePoints(toDelete.slice(i, i + 500));
       }
     }
-    for (const { payload, ids: group } of patches.values()) await AIOSQdrant.setPayload(group, payload);
+    for (const { payload, ids: group } of patches.values()) await SarvaQdrant.setPayload(group, payload);
 
     const missing = [];
     for (const item of liveItems || []) {
@@ -415,16 +415,16 @@
   }
 
   async function clear() {
-    if (await AIOSQdrant.exists()) await AIOSQdrant.drop();
+    if (await SarvaQdrant.exists()) await SarvaQdrant.drop();
     invalidate();
-    const dims = await AIOSOllama.dimensions();
-    await AIOSQdrant.ensure(dims);
+    const dims = await SarvaOllama.dimensions();
+    await SarvaQdrant.ensure(dims);
     ready = true;
     await messenger.storage.local.remove(FAIL_KEY);
     return true;
   }
 
-  globalThis.AIOSIndex = {
+  globalThis.SarvaIndex = {
     ingest,
     known,
     stats,

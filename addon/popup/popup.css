@@ -130,10 +130,10 @@ body {
 /* No known total (catch-up / verify): sliding pulse instead of a percent */
 .job-fill.indeterminate {
   width: 30%;
-  animation: aios-slide 1.2s ease-in-out infinite;
+  animation: sarva-slide 1.2s ease-in-out infinite;
 }
 
-@keyframes aios-slide {
+@keyframes sarva-slide {
   0% { margin-left: -30%; }
   100% { margin-left: 100%; }
 }

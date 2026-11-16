@@ -1,13 +1,13 @@
 {
   "manifest_version": 2,
-  "name": "Thunderbird AI OmniSearch",
+  "name": "SarvaSearch",
   "description": "Hybrid semantic + keyword search over your Thunderbird mail, powered by local AI. Indexes the mail Thunderbird already downloaded, straight into Qdrant.",
   "version": "3.0.0",
   "author": "Vijay Prema",
-  "homepage_url": "https://github.com/vijay-prema/thunderbird-ai-omnisearch",
+  "homepage_url": "https://github.com/vijay-prema/thunderbird-sarvasearch",
   "browser_specific_settings": {
     "gecko": {
-      "id": "ai-omnisearch@vijay-prema.github.io",
+      "id": "sarvasearch@vijay-prema.github.io",
       "strict_min_version": "128.0"
     }
   },
@@ -38,7 +38,7 @@
     ]
   },
   "browser_action": {
-    "default_title": "AI OmniSearch",
+    "default_title": "SarvaSearch",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/search-16.svg",
@@ -50,7 +50,7 @@
       "suggested_key": {
         "default": "Ctrl+Alt+S"
       },
-      "description": "Open AI OmniSearch"
+      "description": "Open SarvaSearch"
     }
   },
   "options_ui": {

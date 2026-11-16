@@ -1,5 +1,5 @@
 'use strict';
-// Message identity. Exposes globalThis.AIOSKey.
+// Message identity. Exposes globalThis.SarvaKey.
 //
 // Two identities, two jobs:
 //
@@ -45,5 +45,5 @@
     return (doc.accountId || '') + SEP + mid;
   }
 
-  globalThis.AIOSKey = { docKey, identity, SEP };
+  globalThis.SarvaKey = { docKey, identity, SEP };
 })();

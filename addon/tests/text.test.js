@@ -9,7 +9,7 @@ const assert = require('node:assert');
 const { loadLib } = require('./harness');
 
 loadLib('text');
-const T = globalThis.AIOSText;
+const T = globalThis.SarvaText;
 
 test('uuid5 point ids are stable', async () => {
   const cases = [

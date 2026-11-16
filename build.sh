@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Package the Thunderbird add-on into an .xpi for "Install Add-on From File".
 #
-#   ./build.sh            -> thunderbird-ai-omnisearch-<version>.xpi
+#   ./build.sh            -> sarvasearch-<version>.xpi
 #   ./build.sh --dev      -> ...-<version>-<branch>-<sha>.xpi (development build)
 #
 # There is no build step: the add-on is plain JavaScript, this just zips it.
@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 version=$(node -p "require('./addon/manifest.json').version")
-name="thunderbird-ai-omnisearch-${version}"
+name="sarvasearch-${version}"
 
 if [[ "${1:-}" == "--dev" ]]; then
   branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")

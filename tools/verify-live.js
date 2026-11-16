@@ -37,7 +37,7 @@ for (const name of ['http', 'settings', 'text', 'qdrant', 'ollama', 'index', 'se
 
 const QDRANT = process.env.QDRANT_URL || 'http://127.0.0.1:6333';
 const OLLAMA = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
-const COLLECTION = process.env.COLLECTION || 'ai_omnisearch';
+const COLLECTION = process.env.COLLECTION || 'sarvasearch';
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -46,8 +46,8 @@ function check(name, ok, detail) {
 }
 
 async function configure(collection) {
-  await globalThis.AIOSSettings.save({ qdrantUrl: QDRANT, ollamaUrl: OLLAMA, collection });
-  globalThis.AIOSIndex.invalidate();
+  await globalThis.SarvaSettings.save({ qdrantUrl: QDRANT, ollamaUrl: OLLAMA, collection });
+  globalThis.SarvaIndex.invalidate();
 }
 
 async function show(label, res, ms) {
@@ -68,19 +68,19 @@ async function timed(fn) {
 async function main() {
   await configure(COLLECTION);
 
-  const health = await globalThis.AIOSIndex.health();
+  const health = await globalThis.SarvaIndex.health();
   console.log(`qdrant=${health.qdrant} ${health.qdrant_version} collection=${health.collection} ollama=${health.ollama}`);
   check('Qdrant reachable', health.qdrant === 'ok');
   check('collection loaded', health.collection === 'green' || health.collection === 'yellow', health.collection);
   check('Ollama reachable', health.ollama === 'ok');
 
-  const stats = await globalThis.AIOSIndex.stats();
+  const stats = await globalThis.SarvaIndex.stats();
   console.log(`indexed: ${stats.total_emails} messages, ${stats.header_only} header-only, ${stats.encrypted} encrypted`);
   console.log(`accounts: ${stats.accounts.map((a) => `${a.account_id}=${a.count}`).join(' ')}`);
   check('index has messages', stats.total_emails > 0, String(stats.total_emails));
 
   for (const [mode, query] of [['keyword', 'invo'], ['semantic', 'plumbing invoice'], ['hybrid', 'acme invoice']]) {
-    const [res, ms] = await timed(() => globalThis.AIOSSearch.search({ query, mode, limit: 5 }));
+    const [res, ms] = await timed(() => globalThis.SarvaSearch.search({ query, mode, limit: 5 }));
     await show(`${mode}: ${JSON.stringify(query)}`, res, ms);
     check(`${mode} search returned results`, res.results.length > 0);
     check(`${mode} results carry payload fields`,
@@ -88,21 +88,21 @@ async function main() {
   }
 
   const [filtered, fms] = await timed(() =>
-    globalThis.AIOSSearch.search({ query: 'invoice', mode: 'hybrid', limit: 5, from: 'acme', after: '2024-01-01' })
+    globalThis.SarvaSearch.search({ query: 'invoice', mode: 'hybrid', limit: 5, from: 'acme', after: '2024-01-01' })
   );
   await show(`filtered: invoice from:acme after:2024-01-01`, filtered, fms);
   check('from filter only returns that sender',
     filtered.results.every((r) => r.from.toLowerCase().includes('acme')), `${filtered.results.length} results`);
 
-  const keywords = await timed(() => globalThis.AIOSSearch.search({ query: 'invo', mode: 'keyword', limit: 5 }));
+  const keywords = await timed(() => globalThis.SarvaSearch.search({ query: 'invo', mode: 'keyword', limit: 5 }));
   check('prefix query "invo" matched (search-as-you-type)', keywords[0].results.length > 0, `${keywords[1]}ms`);
 
   if (!ROUNDTRIP) return;
 
   // ---- write path against a throwaway collection ----
-  const TMP = 'aios_verify_tmp';
+  const TMP = 'sarvasearch_verify_tmp';
   await configure(TMP);
-  await globalThis.AIOSIndex.clear();
+  await globalThis.SarvaIndex.clear();
   const doc = (over) => ({
     message_id: 'verify-1@example.com',
     account_id: 'verify-acct',
@@ -122,30 +122,30 @@ async function main() {
     ...over,
   });
 
-  let r = await globalThis.AIOSIndex.ingest([doc()]);
+  let r = await globalThis.SarvaIndex.ingest([doc()]);
   check('ingest stores a new message', r.indexed === 1, JSON.stringify(r));
 
-  r = await globalThis.AIOSIndex.ingest([doc({ folder: 'Sent' })]);
+  r = await globalThis.SarvaIndex.ingest([doc({ folder: 'Sent' })]);
   check('re-ingest merges the folder instead of re-embedding', r.folders_added === 1 && r.unchanged === 0, JSON.stringify(r));
 
-  const hit = await globalThis.AIOSSearch.search({ query: 'invoice', mode: 'hybrid', limit: 3 });
+  const hit = await globalThis.SarvaSearch.search({ query: 'invoice', mode: 'hybrid', limit: 3 });
   check('hybrid search finds the ingested message', hit.results.some((x) => x.message_id === 'verify-1@example.com'));
   check('folders merged on the stored point',
     hit.results[0] && hit.results[0].folders.join(',') === 'Inbox,Sent', JSON.stringify(hit.results[0] && hit.results[0].folders));
 
-  const rec = await globalThis.AIOSIndex.reconcile([
+  const rec = await globalThis.SarvaIndex.reconcile([
     { account_id: 'verify-acct', message_id: 'verify-1@example.com', folders: ['Inbox', 'Sent'] },
     { account_id: 'verify-acct', message_id: 'verify-missing@example.com', folders: ['Inbox'] },
   ]);
   check('reconcile reports the missing message', rec.missing.length === 1, JSON.stringify(rec));
 
-  r = await globalThis.AIOSIndex.removeFolder([{ account_id: 'verify-acct', message_id: 'verify-1@example.com', folder: 'Inbox' }]);
+  r = await globalThis.SarvaIndex.removeFolder([{ account_id: 'verify-acct', message_id: 'verify-1@example.com', folder: 'Inbox' }]);
   check('removing one folder keeps the point', r.updated === 1, JSON.stringify(r));
-  r = await globalThis.AIOSIndex.removeFolder([{ account_id: 'verify-acct', message_id: 'verify-1@example.com', folder: 'Sent' }]);
+  r = await globalThis.SarvaIndex.removeFolder([{ account_id: 'verify-acct', message_id: 'verify-1@example.com', folder: 'Sent' }]);
   check('removing the last folder deletes the point', r.deleted === 1, JSON.stringify(r));
 
-  await globalThis.AIOSIndex.clear();
-  check('clear empties the collection', (await globalThis.AIOSIndex.stats()).total_emails === 0);
+  await globalThis.SarvaIndex.clear();
+  check('clear empties the collection', (await globalThis.SarvaIndex.stats()).total_emails === 0);
   await configure(COLLECTION);
 }
 

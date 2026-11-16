@@ -14,8 +14,8 @@ function setup({ qdrantOpts = {}, ollamaOpts = {} } = {}) {
   loadLib('index');
   const qdrant = fakeQdrant(qdrantOpts);
   const ollama = fakeOllama(ollamaOpts);
-  globalThis.AIOSQdrant = qdrant;
-  globalThis.AIOSOllama = ollama;
+  globalThis.SarvaQdrant = qdrant;
+  globalThis.SarvaOllama = ollama;
   installSettings();
   return { qdrant, ollama };
 }
@@ -42,13 +42,13 @@ function doc(over = {}) {
 }
 
 async function idOf(d) {
-  return globalThis.AIOSText.pointId(d.account_id, d.message_id);
+  return globalThis.SarvaText.pointId(d.account_id, d.message_id);
 }
 
 test('a new message is embedded and stored with its hash and folder', async () => {
   const { qdrant, ollama } = setup();
   const d = doc();
-  const r = await globalThis.AIOSIndex.ingest([d]);
+  const r = await globalThis.SarvaIndex.ingest([d]);
 
   assert.strictEqual(r.indexed, 1);
   assert.strictEqual(r.failed, 0);
@@ -63,8 +63,8 @@ test('a new message is embedded and stored with its hash and folder', async () =
 test('unchanged content is not re-embedded', async () => {
   const { ollama } = setup();
   const d = doc();
-  await globalThis.AIOSIndex.ingest([d]);
-  const r = await globalThis.AIOSIndex.ingest([d]);
+  await globalThis.SarvaIndex.ingest([d]);
+  const r = await globalThis.SarvaIndex.ingest([d]);
 
   assert.strictEqual(r.unchanged, 1);
   assert.strictEqual(ollama.calls.embed, 1, 'no second embedding call');
@@ -73,8 +73,8 @@ test('unchanged content is not re-embedded', async () => {
 test('the same message in a second folder merges its folder list', async () => {
   const { qdrant, ollama } = setup();
   const d = doc();
-  await globalThis.AIOSIndex.ingest([d]);
-  const r = await globalThis.AIOSIndex.ingest([doc({ folder: 'Sent' })]);
+  await globalThis.SarvaIndex.ingest([d]);
+  const r = await globalThis.SarvaIndex.ingest([doc({ folder: 'Sent' })]);
 
   assert.strictEqual(r.folders_added, 1);
   assert.strictEqual(ollama.calls.embed, 1, 'folders are metadata, not content');
@@ -84,9 +84,9 @@ test('the same message in a second folder merges its folder list', async () => {
 test('edited content re-embeds and keeps the folder union', async () => {
   const { qdrant, ollama } = setup();
   const d = doc();
-  await globalThis.AIOSIndex.ingest([d]);
-  await globalThis.AIOSIndex.ingest([doc({ folder: 'Sent' })]);
-  const r = await globalThis.AIOSIndex.ingest([doc({ folder: 'Archive', body: 'edited body' })]);
+  await globalThis.SarvaIndex.ingest([d]);
+  await globalThis.SarvaIndex.ingest([doc({ folder: 'Sent' })]);
+  const r = await globalThis.SarvaIndex.ingest([doc({ folder: 'Archive', body: 'edited body' })]);
 
   assert.strictEqual(r.updated, 1);
   assert.strictEqual(ollama.calls.embed, 2);
@@ -98,8 +98,8 @@ test('edited content re-embeds and keeps the folder union', async () => {
 test('attachment names backfill without re-embedding', async () => {
   const { qdrant, ollama } = setup();
   const d = doc();
-  await globalThis.AIOSIndex.ingest([d]);
-  await globalThis.AIOSIndex.ingest([doc({ attachments: ['invoice.pdf'] })]);
+  await globalThis.SarvaIndex.ingest([d]);
+  await globalThis.SarvaIndex.ingest([doc({ attachments: ['invoice.pdf'] })]);
 
   assert.strictEqual(ollama.calls.embed, 1, 'attachments are not part of the embed text');
   assert.deepStrictEqual(qdrant.points.get(await idOf(d)).payload.attachments, ['invoice.pdf']);
@@ -108,9 +108,9 @@ test('attachment names backfill without re-embedding', async () => {
 test('an empty attachment list from a header-only read never erases stored names', async () => {
   const { qdrant } = setup();
   const d = doc();
-  await globalThis.AIOSIndex.ingest([d]);
-  await globalThis.AIOSIndex.ingest([doc({ attachments: ['invoice.pdf'] })]);
-  await globalThis.AIOSIndex.ingest([doc({ attachments: [], header_only: true })]);
+  await globalThis.SarvaIndex.ingest([d]);
+  await globalThis.SarvaIndex.ingest([doc({ attachments: ['invoice.pdf'] })]);
+  await globalThis.SarvaIndex.ingest([doc({ attachments: [], header_only: true })]);
 
   assert.deepStrictEqual(
     qdrant.points.get(await idOf(d)).payload.attachments,
@@ -122,10 +122,10 @@ test('an empty attachment list from a header-only read never erases stored names
 test('an authoritative empty attachment list clears wrong names', async () => {
   const { qdrant } = setup();
   const d = doc();
-  await globalThis.AIOSIndex.ingest([d]);
-  await globalThis.AIOSIndex.ingest([doc({ attachments: ['wrong.eml'] })]);
+  await globalThis.SarvaIndex.ingest([d]);
+  await globalThis.SarvaIndex.ingest([doc({ attachments: ['wrong.eml'] })]);
   // A full read that definitively sees no attachments must clear a wrong value.
-  await globalThis.AIOSIndex.ingest([doc({ attachments: [], header_only: false })]);
+  await globalThis.SarvaIndex.ingest([doc({ attachments: [], header_only: false })]);
 
   assert.deepStrictEqual(qdrant.points.get(await idOf(d)).payload.attachments, []);
 });
@@ -135,12 +135,12 @@ test('a message Ollama refuses is counted, skipped, and not retried forever', as
     ollamaOpts: { failFor: (t) => t.includes('poison') },
   });
   const bad = doc({ message_id: 'bad@example.com', body: 'poison' });
-  const r1 = await globalThis.AIOSIndex.ingest([bad]);
+  const r1 = await globalThis.SarvaIndex.ingest([bad]);
   assert.strictEqual(r1.embed_failed, 1);
   assert.strictEqual(qdrant.points.size, 0);
 
   const before = ollama.calls.embed;
-  const r2 = await globalThis.AIOSIndex.ingest([bad]);
+  const r2 = await globalThis.SarvaIndex.ingest([bad]);
   assert.strictEqual(r2.embed_failed, 1);
   assert.strictEqual(ollama.calls.embed, before, 'recorded failure is not re-sent');
 });
@@ -153,7 +153,7 @@ test('one rejected payload does not lose the rest of its batch', async () => {
   });
   const good = doc({ message_id: 'good@example.com' });
   const bad = doc({ message_id: 'bad@example.com', subject: 'POISON' });
-  const r = await globalThis.AIOSIndex.ingest([good, bad]);
+  const r = await globalThis.SarvaIndex.ingest([good, bad]);
 
   assert.strictEqual(r.failed, 1);
   assert.strictEqual(qdrant.points.size, 1, 'the good message is still indexed');
@@ -163,14 +163,14 @@ test('one rejected payload does not lose the rest of its batch', async () => {
 test('removing a folder deletes the point only when the last folder goes', async () => {
   const { qdrant } = setup();
   const d = doc();
-  await globalThis.AIOSIndex.ingest([d]);
-  await globalThis.AIOSIndex.ingest([doc({ folder: 'Sent' })]);
+  await globalThis.SarvaIndex.ingest([d]);
+  await globalThis.SarvaIndex.ingest([doc({ folder: 'Sent' })]);
 
-  let r = await globalThis.AIOSIndex.removeFolder([{ account_id: 'acct', message_id: d.message_id, folder: 'Inbox' }]);
+  let r = await globalThis.SarvaIndex.removeFolder([{ account_id: 'acct', message_id: d.message_id, folder: 'Inbox' }]);
   assert.strictEqual(r.updated, 1);
   assert.deepStrictEqual(qdrant.points.get(await idOf(d)).payload.folders, ['Sent']);
 
-  r = await globalThis.AIOSIndex.removeFolder([{ account_id: 'acct', message_id: d.message_id, folder: 'Sent' }]);
+  r = await globalThis.SarvaIndex.removeFolder([{ account_id: 'acct', message_id: d.message_id, folder: 'Sent' }]);
   assert.strictEqual(r.deleted, 1);
   assert.strictEqual(qdrant.points.size, 0);
 });
@@ -179,9 +179,9 @@ test('reconcile deletes orphans, fixes folders, and reports what is missing', as
   const { qdrant } = setup();
   const a = doc({ message_id: 'a@example.com' });
   const orphan = doc({ message_id: 'orphan@example.com' });
-  await globalThis.AIOSIndex.ingest([a, orphan]);
+  await globalThis.SarvaIndex.ingest([a, orphan]);
 
-  const r = await globalThis.AIOSIndex.reconcile([
+  const r = await globalThis.SarvaIndex.reconcile([
     { account_id: 'acct', message_id: 'a@example.com', folders: ['Inbox', 'Sent'] },
     { account_id: 'acct', message_id: 'missing@example.com', folders: ['Inbox'] },
   ]);
@@ -195,9 +195,9 @@ test('reconcile deletes orphans, fixes folders, and reports what is missing', as
 test('known() reports which messages are indexed', async () => {
   const { } = setup();
   const d = doc();
-  await globalThis.AIOSIndex.ingest([d]);
+  await globalThis.SarvaIndex.ingest([d]);
 
-  const known = await globalThis.AIOSIndex.known([
+  const known = await globalThis.SarvaIndex.known([
     { account_id: 'acct', message_id: d.message_id },
     { account_id: 'acct', message_id: 'nope@example.com' },
   ]);
@@ -206,9 +206,9 @@ test('known() reports which messages are indexed', async () => {
 
 test('clear drops the collection and forgets embed failures', async () => {
   const { qdrant } = setup();
-  await globalThis.AIOSIndex.ingest([doc()]);
-  await globalThis.AIOSIndex.clear();
+  await globalThis.SarvaIndex.ingest([doc()]);
+  await globalThis.SarvaIndex.clear();
   assert.strictEqual(qdrant.calls.drop, 1);
   assert.strictEqual(qdrant.points.size, 0);
-  assert.strictEqual(await globalThis.AIOSIndex.stats().then((s) => s.total_emails), 0);
+  assert.strictEqual(await globalThis.SarvaIndex.stats().then((s) => s.total_emails), 0);
 });

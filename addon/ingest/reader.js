@@ -7,7 +7,7 @@
 // worker-pool extraction, batched flushes) is ported from
 // CR0CKER/thunderbird-omnisearch (MIT) — its lib/indexer.js — with the
 // flush target changed from its local MiniSearch engine to a batch of docs
-// handed to AIOSIndex. Exposes globalThis.AIOSReader.
+// handed to SarvaIndex. Exposes globalThis.SarvaReader.
 (function () {
   function hwc() {
     return (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
@@ -18,7 +18,7 @@
   // Message-body reads (messenger.messages.getFull) kept in flight at once.
   // Indexing is I/O-bound on these backend round-trips, so we overlap many.
   const READ_CONCURRENCY = clamp(hwc() * 4, 16, 64);
-  // Docs per flush batch handed to AIOSIndex (one embed call per batch).
+  // Docs per flush batch handed to SarvaIndex (one embed call per batch).
   const FLUSH_BATCH = 100;
 
   // ---- settings (ported from omnisearch, same storage keys/defaults) ----
@@ -58,9 +58,9 @@
     try {
       const r = await messenger.storage.local.get('settings');
       const v = r.settings && r.settings.bodyLimit;
-      return Number.isFinite(v) && v > 0 ? v : OmniExtract.DEFAULT_MAX_BODY;
+      return Number.isFinite(v) && v > 0 ? v : SarvaExtract.DEFAULT_MAX_BODY;
     } catch (e) {
-      return OmniExtract.DEFAULT_MAX_BODY;
+      return SarvaExtract.DEFAULT_MAX_BODY;
     }
   }
 
@@ -142,7 +142,7 @@
     };
   }
 
-  // Turn an extracted OmniExtract doc into an index doc.
+  // Turn an extracted SarvaExtract doc into an index doc.
   function toIndexDoc(doc) {
     return {
       message_id: doc.headerMessageId || 'local:' + doc.id,
@@ -175,15 +175,15 @@
     try {
       full = await messenger.messages.getFull(header.id, { decrypt: false });
     } catch (e) {
-      return toIndexDoc(OmniExtract.makeDoc(meta, '', false, false));
+      return toIndexDoc(SarvaExtract.makeDoc(meta, '', false, false));
     }
-    const r = OmniExtract.buildDoc(meta, full, indexEncrypted, maxBody);
+    const r = SarvaExtract.buildDoc(meta, full, indexEncrypted, maxBody);
     if (!r.needsDecrypt) return toIndexDoc(r.doc);
     try {
       const dec = await messenger.messages.getFull(header.id); // decrypt defaults to true
-      return toIndexDoc(OmniExtract.buildDecryptedDoc(meta, dec, maxBody).doc);
+      return toIndexDoc(SarvaExtract.buildDecryptedDoc(meta, dec, maxBody).doc);
     } catch (e) {
-      return toIndexDoc(OmniExtract.makeDoc(meta, '', false, true));
+      return toIndexDoc(SarvaExtract.makeDoc(meta, '', false, true));
     }
   }
 
@@ -231,7 +231,7 @@
     try {
       full = await messenger.messages.getFull(header.id, { decrypt: false });
     } catch (e) {
-      return OmniExtract.makeDoc(meta, '', false, false);
+      return SarvaExtract.makeDoc(meta, '', false, false);
     }
     const r = await extractor.run('plain', meta, full, indexEncrypted, maxBody);
     if (!r.needsDecrypt) return r.doc;
@@ -239,7 +239,7 @@
       const dec = await messenger.messages.getFull(header.id); // decrypt
       return (await extractor.run('decrypted', meta, dec, false, maxBody)).doc;
     } catch (e) {
-      return OmniExtract.makeDoc(meta, '', false, true);
+      return SarvaExtract.makeDoc(meta, '', false, true);
     }
   }
 
@@ -309,8 +309,8 @@
     const live = new Map();
     for (const folder of folders) {
       await forEachHeader(folder.id, (header) => {
-        const id = AIOSKey.identity(header);
-        const key = id.account_id + AIOSKey.SEP + id.message_id;
+        const id = SarvaKey.identity(header);
+        const key = id.account_id + SarvaKey.SEP + id.message_id;
         let entry = live.get(key);
         if (!entry) {
           entry = { account_id: id.account_id, message_id: id.message_id, folders: new Set(), headerId: header.id };
@@ -324,7 +324,7 @@
     return live;
   }
 
-  globalThis.AIOSReader = {
+  globalThis.SarvaReader = {
     flattenFolders,
     headerToDoc,
     fullBuild,

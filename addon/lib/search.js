@@ -1,5 +1,5 @@
 'use strict';
-// Hybrid search over Qdrant. Exposes globalThis.AIOSSearch.
+// Hybrid search over Qdrant. Exposes globalThis.SarvaSearch.
 //
 // Two engines, fused with RRF:
 //
@@ -106,7 +106,7 @@
   }
 
   async function textHits(query, field, filter, limit) {
-    const res = await AIOSQdrant.query({
+    const res = await SarvaQdrant.query({
       query: { text: query },
       using: field,
       limit,
@@ -134,13 +134,13 @@
   async function semanticRanking(query, filter, candidates) {
     let vector;
     try {
-      const vectors = await AIOSOllama.embed([query]);
+      const vectors = await SarvaOllama.embed([query]);
       vector = vectors[0];
       if (!vector) throw new Error('the embedding service returned no vector');
     } catch (e) {
       throw new SemanticUnavailable(e.message);
     }
-    const res = await AIOSQdrant.query({
+    const res = await SarvaQdrant.query({
       query: vector,
       limit: candidates,
       filter,
@@ -179,11 +179,11 @@
     const ids = await Promise.all(
       keys.map((key) => {
         const [account, messageId] = key.split('\u0000');
-        return AIOSText.pointId(account, messageId);
+        return SarvaText.pointId(account, messageId);
       })
     );
     const out = new Map();
-    for (const p of await AIOSQdrant.retrieve(ids)) {
+    for (const p of await SarvaQdrant.retrieve(ids)) {
       const payload = p.payload || {};
       out.set(keyOf(payload), payload);
     }
@@ -204,7 +204,7 @@
   // search({query, mode, latest, limit, account, from, to, after, before}) ->
   // the shape the result cards and the status line read.
   async function search(req) {
-    const s = req.settings || (await AIOSSettings.get());
+    const s = req.settings || (await SarvaSettings.get());
     const mode = VALID_MODES.includes(req.mode) ? req.mode : s.mode || 'hybrid';
     const latest = !!req.latest;
     const query = String(req.query || '').trim();
@@ -216,7 +216,7 @@
 
     // The collection is created on first use. Keyword-only search skips this:
     // it needs no embedding, so it keeps working with Ollama down.
-    if (mode !== 'keyword') await AIOSIndex.ensureReady();
+    if (mode !== 'keyword') await SarvaIndex.ensureReady();
 
     let keywordHits = [];
     if (mode !== 'semantic') {
@@ -231,7 +231,7 @@
       } catch (e) {
         if (mode === 'semantic') throw e;
         semanticAvailable = false; // hybrid degrades to keyword-only
-        console.warn('[AI OmniSearch] semantic engine unavailable, keyword-only:', e.message);
+        console.warn('[SarvaSearch] semantic engine unavailable, keyword-only:', e.message);
       }
     }
 
@@ -291,7 +291,7 @@
     };
   }
 
-  globalThis.AIOSSearch = {
+  globalThis.SarvaSearch = {
     search,
     parseBound,
     fuse,

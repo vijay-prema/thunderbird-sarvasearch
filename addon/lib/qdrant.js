@@ -1,5 +1,5 @@
 'use strict';
-// Qdrant REST client. Exposes globalThis.AIOSQdrant.
+// Qdrant REST client. Exposes globalThis.SarvaQdrant.
 //
 // Qdrant is the whole index: it holds the vectors, the message payloads, the
 // content hashes and the BM25 text indexes. The JavaScript here is a thin REST
@@ -14,9 +14,9 @@
   const TEXT_FIELDS = ['subject', 'from', 'to', 'body'];
 
   async function config() {
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     return {
-      base: AIOSHttp.join(s.qdrantUrl, ''),
+      base: SarvaHttp.join(s.qdrantUrl, ''),
       collection: s.collection,
       headers: s.qdrantApiKey ? { 'api-key': s.qdrantApiKey } : {},
       timeoutMs: 60000,
@@ -25,7 +25,7 @@
 
   async function call(method, path, body, opts = {}) {
     const c = await config();
-    return AIOSHttp.request(c.base + path, {
+    return SarvaHttp.request(c.base + path, {
       method,
       body,
       headers: c.headers,
@@ -53,7 +53,7 @@
   }
 
   async function collectionInfo() {
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     return call('GET', coll(s.collection), undefined, { timeoutMs: 15000, retries: 0 });
   }
 
@@ -71,7 +71,7 @@
   // every startup, and it repairs a collection that lost an index (deleted by
   // hand, say).
   async function ensure(dimensions) {
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     if (!(await exists())) {
       await call('PUT', coll(s.collection), {
         vectors: { size: dimensions, distance: 'Cosine' },
@@ -101,13 +101,13 @@
 
   async function upsert(points) {
     if (!points.length) return null;
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     return call('PUT', `${coll(s.collection)}/points?wait=false`, { points }, { timeoutMs: 120000 });
   }
 
   async function retrieve(ids) {
     if (!ids.length) return [];
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     const out = [];
     for (let i = 0; i < ids.length; i += 1000) {
       const res = await call('POST', `${coll(s.collection)}/points`, {
@@ -122,19 +122,19 @@
 
   async function setPayload(ids, payload) {
     if (!ids.length) return null;
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     return call('POST', `${coll(s.collection)}/points/payload?wait=false`, { payload, points: ids });
   }
 
   async function deletePoints(ids) {
     if (!ids.length) return null;
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     return call('POST', `${coll(s.collection)}/points/delete?wait=false`, { points: ids });
   }
 
   function query(body) {
     return config().then((c) =>
-      AIOSHttp.json(c.base + `${coll(c.collection)}/points/query`, body, {
+      SarvaHttp.json(c.base + `${coll(c.collection)}/points/query`, body, {
         headers: c.headers,
         timeoutMs: 120000,
       })
@@ -142,12 +142,12 @@
   }
 
   async function scroll(body) {
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     return call('POST', `${coll(s.collection)}/points/scroll`, body, { timeoutMs: 120000 });
   }
 
   async function count(filter) {
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     const res = await call('POST', `${coll(s.collection)}/points/count`, { exact: true, filter }, {
       timeoutMs: 30000,
     });
@@ -155,17 +155,17 @@
   }
 
   async function facet(key, limit) {
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     const res = await call('POST', `${coll(s.collection)}/facet`, { key, limit: limit || 50, exact: true });
     return (res && res.result && res.result.hits) || [];
   }
 
   async function drop() {
-    const s = await AIOSSettings.get();
+    const s = await SarvaSettings.get();
     return call('DELETE', coll(s.collection));
   }
 
-  globalThis.AIOSQdrant = {
+  globalThis.SarvaQdrant = {
     TEXT_FIELDS,
     version,
     health,

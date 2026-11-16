@@ -1,5 +1,5 @@
 'use strict';
-// JSON-over-HTTP helper shared by every other module. Exposes globalThis.AIOSHttp.
+// JSON-over-HTTP helper shared by every other module. Exposes globalThis.SarvaHttp.
 //
 // Two services are spoken to directly now (Qdrant and Ollama), so the retry
 // and error-unwrapping rules live in one place:
@@ -82,5 +82,5 @@
     return String(base || '').replace(/\/+$/, '') + path;
   }
 
-  globalThis.AIOSHttp = { request, json, join, sleep, detailOf };
+  globalThis.SarvaHttp = { request, json, join, sleep, detailOf };
 })();
