@@ -20,5 +20,5 @@ fi
 
 name="${name}.xpi"
 rm -f "$name"
-(cd addon && zip -qr "../$name" . -x '*.DS_Store')
+(cd addon && zip -qr "../$name" . -x '*.DS_Store' -x 'tests/*' -x '*.map')
 echo "Built $name"

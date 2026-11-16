@@ -1,0 +1,16 @@
+{
+  "name": "thunderbird-ai-omnisearch",
+  "version": "3.0.0",
+  "private": true,
+  "description": "Thunderbird add-on: hybrid semantic + keyword search over your own mail, indexed straight into Qdrant",
+  "scripts": {
+    "test": "node --test addon/tests/*.test.js",
+    "check": "find addon tools -name '*.js' -exec node --check {} \\;",
+    "verify": "node tools/verify-live.js",
+    "verify:roundtrip": "node tools/verify-live.js --roundtrip",
+    "build": "./build.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

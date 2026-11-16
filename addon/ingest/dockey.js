@@ -3,11 +3,12 @@
 //
 // Two identities, two jobs:
 //
-// - serverIdentity(header) — what the search server keys records by:
+// - identity(header) — what the index keys records by:
 //   (account_id, message_id), where message_id is the RFC Message-ID or, if
 //   the mail lacks one (rare; Thunderbird usually synthesizes an md5: id),
-//   a 'local:<numeric id>' fallback. The server derives its Qdrant point IDs
-//   from exactly this pair, so the same value must always come out here.
+//   a 'local:<numeric id>' fallback. The Qdrant point ID is derived from
+//   exactly this pair (lib/text.js pointId), so the same value must always
+//   come out here.
 //
 // - docKey(doc) — the local dedup key used while collecting the live set for
 //   reconcile: account + message id, joined with a NUL separator that cannot
@@ -23,8 +24,8 @@
   // NUL separator, written as the ESCAPE '\0' so git keeps this file text.
   const SEP = '\0';
 
-  // The (account_id, message_id) pair the server stores, as one flat object.
-  function serverIdentity(header) {
+  // The (account_id, message_id) pair the index stores, as one flat object.
+  function identity(header) {
     if (!header) return { account_id: '', message_id: '' };
     const accountId =
       (header.folder && header.folder.accountId) || header.accountId || '';
@@ -44,5 +45,5 @@
     return (doc.accountId || '') + SEP + mid;
   }
 
-  globalThis.AIOSKey = { docKey, serverIdentity, SEP };
+  globalThis.AIOSKey = { docKey, identity, SEP };
 })();

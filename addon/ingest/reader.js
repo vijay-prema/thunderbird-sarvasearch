@@ -6,8 +6,8 @@
 // The pipeline shape (READ_CONCURRENCY workers overlapping getFull I/O and
 // worker-pool extraction, batched flushes) is ported from
 // CR0CKER/thunderbird-omnisearch (MIT) — its lib/indexer.js — with the
-// flush target changed from its local MiniSearch engine to the search
-// server's /ingest endpoint. Exposes globalThis.AIOSReader.
+// flush target changed from its local MiniSearch engine to a batch of docs
+// handed to AIOSIndex. Exposes globalThis.AIOSReader.
 (function () {
   function hwc() {
     return (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
@@ -18,7 +18,7 @@
   // Message-body reads (messenger.messages.getFull) kept in flight at once.
   // Indexing is I/O-bound on these backend round-trips, so we overlap many.
   const READ_CONCURRENCY = clamp(hwc() * 4, 16, 64);
-  // Docs per /ingest request (the server's hard cap is its ingest.max_batch).
+  // Docs per flush batch handed to AIOSIndex (one embed call per batch).
   const FLUSH_BATCH = 100;
 
   // ---- settings (ported from omnisearch, same storage keys/defaults) ----
@@ -142,8 +142,8 @@
     };
   }
 
-  // Turn an extracted OmniExtract doc into a server /ingest doc.
-  function toServerDoc(doc) {
+  // Turn an extracted OmniExtract doc into an index doc.
+  function toIndexDoc(doc) {
     return {
       message_id: doc.headerMessageId || 'local:' + doc.id,
       account_id: doc.accountId || '',
@@ -175,15 +175,15 @@
     try {
       full = await messenger.messages.getFull(header.id, { decrypt: false });
     } catch (e) {
-      return toServerDoc(OmniExtract.makeDoc(meta, '', false, false));
+      return toIndexDoc(OmniExtract.makeDoc(meta, '', false, false));
     }
     const r = OmniExtract.buildDoc(meta, full, indexEncrypted, maxBody);
-    if (!r.needsDecrypt) return toServerDoc(r.doc);
+    if (!r.needsDecrypt) return toIndexDoc(r.doc);
     try {
       const dec = await messenger.messages.getFull(header.id); // decrypt defaults to true
-      return toServerDoc(OmniExtract.buildDecryptedDoc(meta, dec, maxBody).doc);
+      return toIndexDoc(OmniExtract.buildDecryptedDoc(meta, dec, maxBody).doc);
     } catch (e) {
-      return toServerDoc(OmniExtract.makeDoc(meta, '', false, true));
+      return toIndexDoc(OmniExtract.makeDoc(meta, '', false, true));
     }
   }
 
@@ -272,7 +272,7 @@
 
     async function flush(force) {
       if (buffer.length === 0 || (!force && buffer.length < FLUSH_BATCH)) return;
-      const batch = buffer.map(toServerDoc);
+      const batch = buffer.map(toIndexDoc);
       buffer = [];
       await sink(batch);
       onProgress(Math.min(count / total, 0.99), count, headerOnly, total);
@@ -309,7 +309,7 @@
     const live = new Map();
     for (const folder of folders) {
       await forEachHeader(folder.id, (header) => {
-        const id = AIOSKey.serverIdentity(header);
+        const id = AIOSKey.identity(header);
         const key = id.account_id + AIOSKey.SEP + id.message_id;
         let entry = live.get(key);
         if (!entry) {

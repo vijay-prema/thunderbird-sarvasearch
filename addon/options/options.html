@@ -78,15 +78,29 @@
 <body>
   <h1>AI OmniSearch Settings</h1>
 
-  <!-- Connection -->
-  <h2>Server</h2>
+  <!-- Services -->
+  <h2>Services</h2>
   <div class="field">
-    <label for="server-url">Server URL</label>
-    <input type="text" id="server-url" placeholder="http://localhost:8342">
+    <label for="qdrant-url">Qdrant URL</label>
+    <input type="text" id="qdrant-url" placeholder="http://127.0.0.1:6333">
+    <span class="hint">The index. Needs Qdrant 1.20 or newer (keyword search uses its BM25 text queries).</span>
   </div>
   <div class="field">
-    <label for="api-key">API Key (optional)</label>
-    <input type="password" id="api-key" placeholder="Leave empty if not configured">
+    <label for="qdrant-key">Qdrant API key (optional)</label>
+    <input type="password" id="qdrant-key" placeholder="Leave empty if not configured">
+  </div>
+  <div class="field">
+    <label for="collection">Collection</label>
+    <input type="text" id="collection" placeholder="ai_omnisearch">
+  </div>
+  <div class="field">
+    <label for="ollama-url">Ollama URL</label>
+    <input type="text" id="ollama-url" placeholder="http://127.0.0.1:11434">
+  </div>
+  <div class="field">
+    <label for="ollama-model">Embedding model</label>
+    <input type="text" id="ollama-model" placeholder="nomic-embed-text">
+    <span class="hint">Changing the model changes the vector size: clear the index and rebuild.</span>
   </div>
   <div class="field" id="health-section"></div>
 
@@ -138,9 +152,9 @@
   </div>
 
   <div class="index-actions">
-    <button id="rebuild-btn" title="Walk every folder and push all mail to the server. Already-indexed messages are skipped, so this also resumes an interrupted build.">Rebuild index</button>
-    <button id="verify-btn" title="Compare the server's index against every live message and fix any differences.">Verify and repair</button>
-    <button id="clear-btn" class="btn-danger" title="Delete the whole index on the server.">Clear index</button>
+    <button id="rebuild-btn" title="Walk every folder and index all mail. Already-indexed messages are skipped, so this also resumes an interrupted build.">Rebuild index</button>
+    <button id="verify-btn" title="Compare the index against every live message and fix any differences.">Verify and repair</button>
+    <button id="clear-btn" class="btn-danger" title="Delete the whole index (drops the Qdrant collection).">Clear index</button>
   </div>
   <div id="job-status"></div>
 
@@ -149,6 +163,12 @@
     <span id="saved-msg" class="saved-msg"></span>
   </div>
 
+  <script src="../lib/http.js"></script>
+  <script src="../lib/settings.js"></script>
+  <script src="../lib/text.js"></script>
+  <script src="../lib/qdrant.js"></script>
+  <script src="../lib/ollama.js"></script>
+  <script src="../lib/index.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

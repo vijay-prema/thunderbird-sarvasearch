@@ -164,8 +164,8 @@
   }
 
   // Lone UTF-16 surrogates (half of an emoji) are not encodable as UTF-8, so
-  // the server's JSON payload for Qdrant and its SQLite write both raise on
-  // them — a single such message failed a whole rebuild. Two sources: cutting
+  // the Qdrant payload's JSON write raises on them — a single such message
+  // failed a whole rebuild. Two sources: cutting
   // a body at the length cap between a high and a low surrogate, and MIME
   // decoding handing back an already-broken string. Replace the unpaired halves
   // with U+FFFD (properly paired ones are left alone).

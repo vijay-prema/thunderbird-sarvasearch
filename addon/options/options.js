@@ -1,35 +1,25 @@
 // Options page logic for the AI OmniSearch addon.
 //
-// Rewritten for the fork: the upstream thunderbird-ai-search options page was
-// IMAP/server-scheduler centric (and its saveSettings had a corrupted line —
-// `apiKey: ***("api-key").value` — a broken redaction committed upstream that
-// made the whole script fail to parse). This page covers connection, search
-// preferences, indexing options, and the rebuild/verify/clear actions.
+// Connection settings are the two services the add-on talks to directly:
+// Qdrant (the index) and Ollama (the embedder). There is no middle server any
+// more, so the health check probes those two endpoints with the values
+// currently in the form — testing what is about to be saved, not the saved
+// copy.
 
 let jobPoll = null;
 
-const DEFAULTS = {
-  serverUrl: "http://localhost:8342",
-  apiKey: "",
-  limit: 20,
-  openIn: "tab",
-  mode: "hybrid",
-  includeSpamTrash: false,
-  indexEncryptedBodies: false,
-  bodyLimit: 4000,
-  excludedAccounts: [],
-};
-
 async function loadSettings() {
-  const data = await messenger.storage.local.get("settings");
-  return { ...DEFAULTS, ...(data.settings || {}) };
+  return AIOSSettings.get();
 }
 
 async function renderSettings() {
   const s = await loadSettings();
 
-  document.getElementById("server-url").value = s.serverUrl;
-  document.getElementById("api-key").value = s.apiKey;
+  document.getElementById("qdrant-url").value = s.qdrantUrl;
+  document.getElementById("qdrant-key").value = s.qdrantApiKey;
+  document.getElementById("collection").value = s.collection;
+  document.getElementById("ollama-url").value = s.ollamaUrl;
+  document.getElementById("ollama-model").value = s.ollamaModel;
   document.getElementById("limit").value = s.limit;
   document.getElementById("body-limit").value = s.bodyLimit;
   document.getElementById("include-spam-trash").checked = !!s.includeSpamTrash;
@@ -81,8 +71,11 @@ async function collectSettings() {
     if (!cb.checked) excludedAccounts.push(cb.dataset.accountId);
   }
   return {
-    serverUrl: document.getElementById("server-url").value.trim().replace(/\/+$/, ""),
-    apiKey: document.getElementById("api-key").value,
+    qdrantUrl: document.getElementById("qdrant-url").value.trim().replace(/\/+$/, ""),
+    qdrantApiKey: document.getElementById("qdrant-key").value,
+    collection: document.getElementById("collection").value.trim() || "ai_omnisearch",
+    ollamaUrl: document.getElementById("ollama-url").value.trim().replace(/\/+$/, ""),
+    ollamaModel: document.getElementById("ollama-model").value.trim() || "nomic-embed-text",
     limit: parseInt(document.getElementById("limit").value, 10) || 20,
     openIn: document.querySelector('input[name="open-in"]:checked').value,
     mode: document.querySelector('input[name="mode"]:checked').value,
@@ -95,7 +88,9 @@ async function collectSettings() {
 
 async function saveSettings() {
   const settings = await collectSettings();
-  await messenger.storage.local.set({ settings });
+  await AIOSSettings.save(settings);
+  // A new endpoint or model means the cached collection state is stale.
+  AIOSIndex.invalidate();
   const msg = document.getElementById("saved-msg");
   msg.textContent = "Saved";
   setTimeout(() => (msg.textContent = ""), 2000);
@@ -106,28 +101,48 @@ async function saveSettings() {
 
 async function loadHealth() {
   const el = document.getElementById("health-section");
-  // Read what is in the form (not necessarily saved yet) so the test
-  // reflects what the user is about to save. An empty URL would fetch a
-  // relative path against moz-extension:// — the "NetworkError" red dot —
-  // so guard it.
-  const serverUrl = document.getElementById("server-url").value.trim().replace(/\/+$/, "");
-  const apiKey = document.getElementById("api-key").value;
-  if (!serverUrl) {
-    el.innerHTML = `<div class="health-row"><span class="health-dot err"></span>No server URL set</div>`;
+  const qdrantUrl = document.getElementById("qdrant-url").value.trim().replace(/\/+$/, "");
+  const key = document.getElementById("qdrant-key").value;
+  const collection = document.getElementById("collection").value.trim() || "ai_omnisearch";
+  const ollamaUrl = document.getElementById("ollama-url").value.trim().replace(/\/+$/, "");
+  const headers = key ? { "api-key": key } : {};
+
+  const row = (label, state, text) =>
+    `<div class="health-row"><span class="health-dot ${state === "ok" ? "ok" : "err"}"></span>${escapeHtml(label)}: ${escapeHtml(text)}</div>`;
+
+  if (!qdrantUrl || !ollamaUrl) {
+    el.innerHTML = row("Qdrant", "err", "no URL set") + row("Ollama", "err", "no URL set");
     return;
   }
-  const headers = { "Content-Type": "application/json" };
-  if (apiKey) headers["X-API-Key"] = apiKey;
+
+  let qdrantLine;
   try {
-    const resp = await fetch(serverUrl + "/health", { headers });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    const row = (label, st) =>
-      `<div class="health-row"><span class="health-dot ${st === "ok" ? "ok" : "err"}"></span>${label}: ${st}</div>`;
-    el.innerHTML = row("Qdrant", data.qdrant) + row("Ollama", data.ollama) + row("SQLite", data.sqlite);
+    const info = await AIOSHttp.request(AIOSHttp.join(qdrantUrl, "/"), { headers, timeoutMs: 8000, retries: 0 });
+    qdrantLine = row("Qdrant", "ok", `v${info.version}`);
   } catch (e) {
-    el.innerHTML = `<div class="health-row"><span class="health-dot err"></span>Server unreachable (${escapeHtml(e.message)})</div>`;
+    qdrantLine = row("Qdrant", "err", "unreachable");
   }
+
+  let collectionLine;
+  try {
+    const info = await AIOSHttp.request(
+      AIOSHttp.join(qdrantUrl, `/collections/${encodeURIComponent(collection)}`),
+      { headers, timeoutMs: 8000, retries: 0 }
+    );
+    collectionLine = row("Index", "ok", `${collection} (${info.result.points_count} points)`);
+  } catch (e) {
+    collectionLine = row("Index", "err", "missing — run a rebuild");
+  }
+
+  let ollamaLine;
+  try {
+    await AIOSHttp.request(AIOSHttp.join(ollamaUrl, "/api/tags"), { timeoutMs: 8000, retries: 0 });
+    ollamaLine = row("Ollama", "ok", "reachable");
+  } catch (e) {
+    ollamaLine = row("Ollama", "err", "unreachable — keyword search still works");
+  }
+
+  el.innerHTML = qdrantLine + collectionLine + ollamaLine;
 }
 
 // --- Index jobs (run in the background script) ---
@@ -203,10 +218,10 @@ async function runJob(type, label) {
 // --- Init ---
 
 document.addEventListener("DOMContentLoaded", async () => {
-  // Fill the form FIRST: loadHealth() reads the URL field, and running it
-  // before the (async) fill read an empty field — fetching a relative
-  // /health against moz-extension:// — which showed a permanent red
-  // "NetworkError" dot even with the server up.
+  // Fill the form FIRST: loadHealth() reads the URL fields, and running it
+  // before the (async) fill read empty fields — fetching a relative path
+  // against moz-extension:// — which showed a permanent red dot even with both
+  // services up.
   await renderSettings();
   loadHealth();
 
@@ -214,20 +229,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("rebuild-btn").addEventListener("click", () => runJob("rebuild", "Rebuild"));
   document.getElementById("verify-btn").addEventListener("click", () => runJob("reconcile", "Verify and repair"));
   document.getElementById("clear-btn").addEventListener("click", async () => {
-    if (!confirm("Delete the whole search index on the server? Search finds nothing until you rebuild.")) {
+    if (!confirm("Delete the whole search index? Search finds nothing until you rebuild.")) {
       return;
     }
     try {
       await bg({ type: "clear" });
       setJobStatus("Index cleared. Start a rebuild to re-index your mail.");
+      loadHealth();
     } catch (e) {
       setJobStatus(`Clear failed: ${e.message}`, true);
     }
   });
 
   // Live health while editing the connection fields.
-  document.getElementById("server-url").addEventListener("change", loadHealth);
-  document.getElementById("api-key").addEventListener("change", loadHealth);
+  for (const id of ["qdrant-url", "qdrant-key", "collection", "ollama-url"]) {
+    document.getElementById(id).addEventListener("change", loadHealth);
+  }
 });
 
 function escapeHtml(text) {

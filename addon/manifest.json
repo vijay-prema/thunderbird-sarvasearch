@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "Thunderbird AI OmniSearch",
-  "description": "Hybrid semantic + keyword search over your Thunderbird mail, powered by local AI (Ollama + Qdrant). Indexes the mail Thunderbird already downloaded - no IMAP.",
-  "version": "2.4.3",
+  "description": "Hybrid semantic + keyword search over your Thunderbird mail, powered by local AI. Indexes mail Thunderbird already downloaded, straight into Qdrant - no server, no IMAP.",
+  "version": "3.0.0",
   "author": "Vijay Prema",
   "homepage_url": "https://github.com/vijay-prema/thunderbird-ai-omnisearch",
   "browser_specific_settings": {
@@ -17,13 +17,20 @@
     "storage",
     "alarms",
     "tabs",
-    "http://localhost/*"
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "scripts": [
+      "lib/http.js",
+      "lib/settings.js",
+      "lib/text.js",
+      "lib/qdrant.js",
+      "lib/ollama.js",
+      "lib/index.js",
+      "lib/search.js",
       "ingest/dockey.js",
       "ingest/extract.js",
-      "ingest/client.js",
       "ingest/reader.js",
       "ingest/open.js",
       "ingest/events.js",

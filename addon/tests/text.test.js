@@ -1,0 +1,66 @@
+'use strict';
+// Identity + hashing primitives, pinned against values the Python server
+// produced. If any of these drift, existing points stop being found (the point
+// id changes) or every message looks new (the hash changes) — a silent,
+// expensive bug, so the fixtures come from the real server.
+
+const test = require('node:test');
+const assert = require('node:assert');
+const { loadLib } = require('./harness');
+
+loadLib('text');
+const T = globalThis.AIOSText;
+
+test('uuid5 point ids match the Python server', async () => {
+  const cases = [
+    ['account2', 'q1w2e3r4t5y6u7i8+9o0p@mail.example.com', '0e9e0811-5bda-5907-ac99-8b136b6f9d82'],
+    ['account2', 'local:8637', 'e0d46cef-f892-58df-9565-95f8f0343539'],
+    ['account7', 'CAF=abc.def+123@mail.example.com', 'de306a3c-860e-536c-ac79-04156d1d4a48'],
+  ];
+  for (const [account, messageId, expected] of cases) {
+    assert.strictEqual(await T.pointId(account, messageId), expected, `${account} / ${messageId}`);
+  }
+});
+
+test('embed text matches build_embed_text byte for byte', () => {
+  const doc = {
+    from: 'Priya Nair <priya@example.com>',
+    to: 'Sam Okafor <sam@example.org>',
+    subject: 'Invoice #10001 - Job #20002',
+    date: '2026-06-24T09:15:00.000Z',
+    body: 'Hi Sam,\n\nPlease find attached invoice 10001 for job 20002.\n\nThanks,\nPriya',
+  };
+  const expected =
+    'From: Priya Nair <priya@example.com>\nTo: Sam Okafor <sam@example.org>\n' +
+    'Subject: Invoice #10001 - Job #20002\nDate: 2026-06-24T09:15:00.000Z\n\n' +
+    'Hi Sam,\n\nPlease find attached invoice 10001 for job 20002.\n\nThanks,\nPriya';
+  assert.strictEqual(T.embedText(doc), expected);
+});
+
+test('content hash matches sha256 of the embed text', async () => {
+  const doc = {
+    from: 'Priya Nair <priya@example.com>',
+    to: 'Sam Okafor <sam@example.org>',
+    subject: 'Invoice #10001 - Job #20002',
+    date: '2026-06-24T09:15:00.000Z',
+    body: 'Hi Sam,\n\nPlease find attached invoice 10001 for job 20002.\n\nThanks,\nPriya',
+  };
+  assert.strictEqual(
+    await T.contentHash(doc),
+    '875a75d248847a312c37b9344739eda40b944fc3fe4841d952b55ddec9051a34'
+  );
+});
+
+test('lone surrogates are repaired, then hash stably', async () => {
+  const broken = { subject: 'price \ud83d drop', body: 'a \ud83d b' };
+  const repaired = T.repairDoc(broken);
+  assert.strictEqual(repaired.subject, 'price \ufffd drop');
+  assert.strictEqual(repaired.body, 'a \ufffd b');
+  // A retry of the same broken text must hash identically, or the message
+  // re-embeds forever.
+  assert.strictEqual(await T.contentHash(broken), await T.contentHash(repaired));
+  // Valid emoji (a real pair) must survive.
+  const emoji = 'party \ud83c\udf89 time';
+  assert.strictEqual(T.repair(emoji), emoji);
+  assert.strictEqual(T.repairDoc({ x: ['ok \ud83c\udf89', 'bad \ude00 pair'] }).x[1], 'bad \ufffd pair');
+});

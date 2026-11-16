@@ -1,11 +1,10 @@
 // Search page logic for the AI OmniSearch addon.
 //
-// Talks to the search server directly (/search with mode + filters) and to
-// the background script (index status, rebuild/verify triggers) over runtime
-// messages. Opening a result goes through AIOSOpen (ingest/open.js), which
+// Runs the search itself (AIOSSearch -> Qdrant, with Ollama embedding the
+// query) and asks the background script only for index status and job
+// triggers. Opening a result goes through AIOSOpen (ingest/open.js), which
 // resolves the stable Message-ID to the live message before opening it.
 
-let settings = null;
 let pollInterval = null;
 
 const MODE_LABEL = {
@@ -14,33 +13,14 @@ const MODE_LABEL = {
   keyword: "Keyword",
 };
 
-async function getSettings() {
-  if (!settings) {
-    const data = await messenger.storage.local.get("settings");
-    settings = data.settings || {};
-  }
-  return settings;
+// Settings live in lib/settings.js; these are the only two accessors the page
+// needs, kept as thin wrappers so the rest of the file reads unchanged.
+function getSettings() {
+  return AIOSSettings.get();
 }
 
-async function saveSettings(patch) {
-  const s = await getSettings();
-  Object.assign(s, patch);
-  await messenger.storage.local.set({ settings: s });
-}
-
-async function apiRequest(path, options = {}) {
-  const s = await getSettings();
-  const url = (s.serverUrl || "http://localhost:8342").replace(/\/+$/, "") + path;
-  const headers = { "Content-Type": "application/json" };
-  if (s.apiKey) {
-    headers["X-API-Key"] = s.apiKey;
-  }
-  const resp = await fetch(url, { ...options, headers: { ...headers, ...options.headers } });
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`${resp.status}: ${body}`);
-  }
-  return resp.json();
+function saveSettings(patch) {
+  return AIOSSettings.save(patch);
 }
 
 // Ask the background script (it owns the pipeline state).
@@ -75,19 +55,15 @@ async function doSearch() {
   const startTime = performance.now();
 
   try {
-    const body = {
+    const data = await AIOSSearch.search({
       query,
       mode,
       limit: s.limit || 20,
-    };
-    if (account) body.account = account;
-    if (from) body.from = from;
-    if (after) body.after = after;
-    if (before) body.before = before;
-
-    const data = await apiRequest("/search", {
-      method: "POST",
-      body: JSON.stringify(body),
+      account,
+      from,
+      after,
+      before,
+      settings: s,
     });
 
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
@@ -342,26 +318,23 @@ async function loadAccountFilter() {
 
 async function loadHealth() {
   const el = document.getElementById("health-indicators");
-  try {
-    const data = await apiRequest("/health");
-    const items = [
-      ["Qdrant", data.qdrant],
-      ["Ollama", data.ollama],
-      ["SQLite", data.sqlite],
-    ];
-    el.innerHTML = items
-      .map(([name, st]) => `<span class="health-dot ${st === "ok" ? "healthy" : "unhealthy"}"></span><span>${name}</span>`)
-      .join("");
-  } catch (e) {
-    el.innerHTML = `<span class="health-dot unhealthy"></span><span>Server unreachable</span>`;
-  }
+  const data = await AIOSIndex.health();
+  const indexState = data.collection === "green" || data.collection === "yellow" ? "ok" : data.collection;
+  const items = [
+    ["Qdrant", data.qdrant],
+    ["Ollama", data.ollama],
+    ["Index", indexState],
+  ];
+  el.innerHTML = items
+    .map(([name, st]) => `<span class="health-dot ${st === "ok" ? "healthy" : "unhealthy"}"></span><span>${name}</span>`)
+    .join("");
 }
 
 async function loadStats() {
   const el = document.getElementById("management-stats");
   const cards = document.getElementById("account-cards");
   try {
-    const stats = await apiRequest("/stats");
+    const stats = await AIOSIndex.stats();
     el.innerHTML = `
       <div class="stat-chip">${stats.total_emails.toLocaleString()} indexed</div>
       ${stats.header_only ? `<div class="stat-chip warn">${stats.header_only.toLocaleString()} header-only</div>` : ""}
@@ -378,7 +351,6 @@ async function loadStats() {
         </div>
         <div class="account-details">
           <span>${acct.count.toLocaleString()} messages indexed</span>
-          ${acct.last_indexed_at ? `<span>Last indexed ${escapeHtml(formatDate(acct.last_indexed_at))}</span>` : ""}
         </div>
       `;
       cards.appendChild(card);
@@ -538,19 +510,21 @@ async function loadVersion() {
   el.classList.remove("mismatch");
   el.title = `Addon v${clientVersion}`;
   try {
-    const data = await apiRequest("/version");
-    const serverVersion = data.version || "unknown";
-    if (serverVersion === clientVersion) {
-      el.textContent = `v${clientVersion}`;
-      el.title = `Addon v${clientVersion} · Server v${serverVersion}`;
-    } else {
-      el.textContent = `addon v${clientVersion} · server v${serverVersion}`;
+    const qdrant = await AIOSQdrant.version();
+    el.textContent = `addon v${clientVersion} · qdrant v${qdrant}`;
+    el.title = `Addon v${clientVersion} · Qdrant v${qdrant}`;
+    // BM25 text queries need Qdrant 1.20 or newer; keyword search silently
+    // returns nothing on an older server, so say it instead.
+    const major = Number(String(qdrant).split(".")[0] || 0);
+    const minor = Number(String(qdrant).split(".")[1] || 0);
+    if (major < 1 || (major === 1 && minor < 20)) {
+      el.textContent = `addon v${clientVersion} · qdrant v${qdrant} (needs 1.20+)`;
       el.classList.add("mismatch");
-      el.title = `Version mismatch — addon v${clientVersion} vs server v${serverVersion}. Please update both to match.`;
+      el.title = `Qdrant ${qdrant} is too old: keyword search needs 1.20 or newer.`;
     }
   } catch (e) {
-    el.textContent = `addon v${clientVersion} · server unreachable`;
-    el.title = `Could not fetch server version: ${e.message}`;
+    el.textContent = `addon v${clientVersion} · qdrant unreachable`;
+    el.title = `Could not reach Qdrant: ${e.message}`;
   }
 }
 

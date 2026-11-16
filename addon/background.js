@@ -1,30 +1,19 @@
 'use strict';
 // Orchestrator. Drives the ingestion pipeline (mail reads via AIOSReader,
-// extraction in the worker pool, uploads via AIOSClient), keeps the server
-// fresh via AIOSEvents (live events + daily catch-up), and answers the UI
-// pages over runtime messages.
+// extraction in the worker pool, embedding + upload via AIOSIndex), keeps the
+// index fresh via AIOSEvents (live events + daily catch-up), and answers the
+// UI pages over runtime messages.
 //
 // The worker-pool RPC is ported from CR0CKER/thunderbird-omnisearch (MIT) —
-// its background.js — with its engine worker replaced by the search server.
-// Depends on the globals AIOSKey, OmniExtract, AIOSClient, AIOSReader,
-// AIOSOpen, AIOSEvents (load order is set in manifest.json).
+// its background.js — with its engine worker replaced by the Qdrant index.
+// Depends on the globals AIOSSettings, AIOSKey, AIOSIndex, OmniExtract,
+// AIOSReader, AIOSOpen, AIOSEvents (load order is set in manifest.json).
 (function () {
   const SEARCH_URL = 'search/search.html';
   const SPACE_NAME = 'ai_omnisearch';
   const ALARM = 'aios-catchup';
   const ALARM_PERIOD_MIN = 1440; // daily
 
-  const DEFAULT_SETTINGS = {
-    serverUrl: 'http://localhost:8342',
-    apiKey: '',
-    limit: 20,
-    openIn: 'tab',
-    mode: 'hybrid',
-    includeSpamTrash: false,
-    indexEncryptedBodies: false,
-    bodyLimit: 4000,
-    excludedAccounts: [],
-  };
 
   // ---- Worker RPC (ported from omnisearch) ----
   // Shared request/response envelope: post {reqId, ...payload}, resolve when
@@ -202,17 +191,17 @@
   }
 
   // Full rebuild: walk every included folder, push every message. Cheap to
-  // re-run after a failure — the server skips unchanged messages by content
+  // re-run after a failure — the index skips unchanged messages by content
   // hash, so a rebuild resumes where it stopped.
   function fullBuild() {
     return runJob('building', async () => {
       const startedAt = Date.now();
-      // A doc the server could not store is skipped there (logged, retried on
+      // A doc the index could not store is skipped there (logged, retried on
       // the next pass) rather than failing the whole run — carry that count to
       // the UI so the skip is not silent.
       let failed = 0;
       const sink = async (docs) => {
-        const r = await AIOSClient.ingest(docs);
+        const r = await AIOSIndex.ingest(docs);
         if (r && r.failed) failed += r.failed;
       };
       const result = await AIOSReader.fullBuild(extractor, sink, (frac, count, headerOnly, total) => {
@@ -243,7 +232,7 @@
   }
 
   async function clearIndex() {
-    await AIOSClient.clear();
+    await AIOSIndex.clear();
     await AIOSEvents.clearWatermarks();
     setStatus({ lastError: null, lastResult: { cleared: true }, finishedAt: Date.now() });
     return { cleared: true };
@@ -304,24 +293,23 @@
   }
 
   async function ensureDefaultSettings() {
-    const data = await messenger.storage.local.get('settings');
-    const existing = data.settings || {};
-    await messenger.storage.local.set({ settings: { ...DEFAULT_SETTINGS, ...existing } });
+    // Merges defaults, prunes the 2.x server keys, and rewrites the copy.
+    await AIOSSettings.ensure();
   }
 
-  // First run (or a fresh server): a full build; otherwise just catch up.
-  // If the server is unreachable, do nothing — the user will see it in the
-  // search page and can hit Rebuild once it is up.
+  // First run (or an empty index): a full build; otherwise just catch up.
+  // If Qdrant is unreachable, do nothing — the user will see it in the search
+  // page and can hit Rebuild once it is up.
   async function firstRun() {
     try {
-      const stats = await AIOSClient.stats();
+      const stats = await AIOSIndex.stats();
       if (!stats || !stats.total_emails) {
         fullBuild();
       } else {
         catchUp();
       }
     } catch (e) {
-      console.warn('[AI OmniSearch] server unreachable on startup:', e);
+      console.warn('[AI OmniSearch] index unreachable on startup:', e);
     }
   }
 

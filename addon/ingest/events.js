@@ -1,9 +1,9 @@
 'use strict';
-// Keeps the server's index correct as mail changes. Exposes globalThis.AIOSEvents.
+// Keeps the index correct as mail changes. Exposes globalThis.AIOSEvents.
 //
 // The push surface: all FIVE message events Thunderbird exposes
 // (onNewMailReceived, onUpdated, onDeleted, onMoved, onCopied), each applied
-// to the server as ingest / folder-remove / delete calls.
+// to the index as ingest / folder-remove / delete calls.
 //
 // Events alone cannot keep the index correct — onNewMailReceived fires when a
 // message is *received*, which structurally cannot cover mail synced while
@@ -14,7 +14,7 @@
 //
 // So freshness is a PULL, with events as the low-latency fast path on top:
 // catchUp() re-walks everything newer than a stored watermark (with a 1-day
-// overlap), and reconcile() diffs the server's index against the full live
+// overlap), and reconcile() diffs the index against the full live
 // set. A dropped event costs latency instead of permanent invisibility.
 (function () {
   const DAY_MS = 24 * 60 * 60 * 1000;
@@ -34,7 +34,7 @@
   }
 
   function identityOf(header) {
-    return AIOSKey.serverIdentity(header);
+    return AIOSKey.identity(header);
   }
 
   function folderNameOf(header) {
@@ -60,12 +60,12 @@
     return true;
   }
 
-  // Index one header now (single-message path for live events). Server-side
+  // Index one header now (single-message path for live events). Index-side
   // dedup (content hash + deterministic point ids) makes re-sends cheap.
   async function upsertHeader(header, opts) {
     if (!shouldIndex(header, opts)) return false;
     const doc = await AIOSReader.headerToDoc(header, opts.indexEncrypted);
-    await AIOSClient.ingest([doc]);
+    await AIOSIndex.ingest([doc]);
     return true;
   }
 
@@ -108,7 +108,7 @@
       const items = headersOf(messageList).map(identityOf);
       if (!items.length) return;
       try {
-        await AIOSClient.delete(items);
+        await AIOSIndex.deleteMessages(items);
       } catch (e) {
         console.error('[AI OmniSearch] onDeleted update failed:', e);
       }
@@ -118,14 +118,14 @@
       const opts = await indexOpts();
       // A message moved INTO Junk/Trash is dropped (upsertHeader skips it);
       // one moved out gets (re)indexed. Either way drop the originals'
-      // folders first — the server merges folder lists, so removing the old
+      // folders first — the index merges folder lists, so removing the old
       // folder only deletes the record when the last folder goes.
       const removals = headersOf(originalMessages)
         .map((h) => ({ ...identityOf(h), folder: folderNameOf(h) }))
         .filter((r) => r.folder);
       if (removals.length) {
         try {
-          await AIOSClient.removeFolder(removals);
+          await AIOSIndex.removeFolder(removals);
         } catch (e) {
           console.error('[AI OmniSearch] onMoved folder-remove failed:', e);
         }
@@ -170,9 +170,9 @@
 
   // ---- freshness ----
 
-  // Docs per /ingest request during catch-up and reconcile re-ingest. The
-  // single-doc path (one HTTP round trip + one embed call per message) made
-  // a large catch-up ~10x slower than the batched rebuild pipeline.
+  // Docs per ingest batch during catch-up and reconcile re-ingest. The
+  // single-doc path (one embed call per message) made a large catch-up ~10x
+  // slower than the batched rebuild pipeline.
   const INGEST_BATCH = 50;
   // Body reads (messenger.messages.getFull) kept in flight at once during
   // catch-up. Serial reads capped the walk at a few docs/sec; overlapping
@@ -234,7 +234,7 @@
 
   // Index everything newer than each account's watermark. Cost is O(new
   // mail), not O(archive): messages.query bounds the work with fromDate.
-  // The /has check skips messages the server already holds BEFORE paying
+  // The known-set check skips messages the index already holds BEFORE paying
   // for their body reads (the 1-day overlap would otherwise re-read a day
   // of mail every run). Docs are ingested in batches, not one per request,
   // and body reads run READ_CONCURRENCY at a time.
@@ -309,7 +309,7 @@
         const docs = batch;
         batch = [];
         try {
-          await AIOSClient.ingest(docs);
+          await AIOSIndex.ingest(docs);
         } catch (e) {
           // The batch is lost for this run — but the watermark below is NOT
           // advanced when anything failed, so the next run re-walks this
@@ -334,12 +334,12 @@
             scanned++;
           }
 
-          // Ask the server before reading: one /has call per page instead of
+          // Ask the index before reading: one lookup per page instead of
           // a getFull body read per message.
           const known = new Set();
           if (headers.length) {
             try {
-              const r = await AIOSClient.has(headers.map(identityOf));
+              const r = { known: await AIOSIndex.known(headers.map(identityOf)) };
               for (const k of r.known || []) {
                 known.add(k.account_id + AIOSKey.SEP + k.message_id);
               }
@@ -418,16 +418,16 @@
     }
   }
 
-  // Deep sweep: compare every live message against the server's index. The
-  // server deletes orphans and fixes folder drift itself; the messages it
-  // reports missing are re-read from Thunderbird and re-ingested. This is
+  // Deep sweep: compare every live message against the index. The index
+  // deletes orphans and fixes folder drift itself; the messages it reports
+  // missing are re-read from Thunderbird and re-ingested. This is
   // the backstop for the one hole the watermark cannot see — back-dated mail
   // (an old Date header imported or moved in today) lands behind the mark
   // and is invisible to catchUp.
   //
   // Two progress stages, both reported through onProgress(processed, total,
   // headerOnly): the live-set collection, then the re-ingest of whatever
-  // the server was missing (the total shrinks when the second stage starts).
+  // the index was missing (the total shrinks when the second stage starts).
   async function reconcile(onProgress) {
     const live = await AIOSReader.collectAllIdentities(
       onProgress ? (processed, total) => onProgress(processed, total, 0) : null
@@ -437,10 +437,10 @@
       message_id: e.message_id,
       folders: [...e.folders],
     }));
-    const r = await AIOSClient.reconcile(liveItems);
+    const r = await AIOSIndex.reconcile(liveItems);
 
-    // Re-ingest what the server is missing, in batches. headerToDoc does a
-    // getFull body read per message; AIOSClient serializes the writes.
+    // Re-ingest what the index is missing, in batches. headerToDoc does a
+    // getFull body read per message; AIOSIndex serializes the writes.
     const opts = await indexOpts();
     const missing = r.missing || [];
     let added = 0;
@@ -452,7 +452,7 @@
       const docs = batch;
       batch = [];
       try {
-        await AIOSClient.ingest(docs);
+        await AIOSIndex.ingest(docs);
       } catch (e) {
         // Lost for this run; reconcile makes no watermark promises, so the
         // next reconcile re-checks and re-delivers what is still missing.
