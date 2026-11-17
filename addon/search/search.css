@@ -339,10 +339,41 @@ main {
   display: none;
 }
 
+.progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .progress-label {
   font-size: 12px;
   color: var(--text-secondary);
   margin-bottom: 4px;
+}
+
+/* Pause / resume control, shown only while a job is in flight */
+.btn-pause {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-pause:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* Held, not stopped: the bar keeps its last width and turns amber so a paused
+   job never reads as an error or as a finished one. */
+.indexer-progress.paused .progress-fill {
+  background: var(--warning);
 }
 
 .progress-bar {

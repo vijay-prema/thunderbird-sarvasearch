@@ -87,7 +87,11 @@
       </div>
 
       <div id="indexer-progress" class="indexer-progress hidden">
-        <div class="progress-label" id="progress-label">Indexing...</div>
+        <div class="progress-head">
+          <div class="progress-label" id="progress-label">Indexing...</div>
+          <button id="pause-btn" class="btn-pause"
+            title="Pause between messages: the job keeps its place, and Resume continues from there.">Pause</button>
+        </div>
         <div class="progress-sub" id="progress-sub"></div>
         <div class="progress-bar">
           <div class="progress-fill" id="progress-fill"></div>

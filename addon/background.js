@@ -59,6 +59,13 @@
   const status = {
     phase: 'idle', // idle | building | catching-up | reconciling
     running: false,
+    // A job can be running yet not moving: pause is cooperative, so the job
+    // stays "running" (no second job may start) while blocked at a checkpoint.
+    // pausedAt/pausedMs exist so the UI's rate and ETA stop counting the
+    // paused time — a job paused for an hour must not claim 1 msg/min.
+    paused: false,
+    pausedAt: null,
+    pausedMs: 0,
     processed: 0,
     total: 0,
     headerOnly: 0,
@@ -135,8 +142,14 @@
       }
       // Snapshot the state this render is for, so a tick landing mid-render
       // cannot produce a mix (e.g. cleared text with the running colour).
-      const { running, total, processed, lastError } = status;
-      if (running) {
+      const { running, paused, total, processed, lastError } = status;
+      if (running && paused) {
+        // Held, not finished: a still badge with its own colour, so a paused
+        // job never reads as progress stopped by an error. ASCII bars, not a
+        // glyph — a missing symbol font renders the badge as a tofu box.
+        await btn.setBadgeBackgroundColor({ color: "#8a6d00" });
+        await btn.setBadgeText({ text: "II" });
+      } else if (running) {
         await btn.setBadgeBackgroundColor({ color: "#086A78" });
         if (total > 0) {
           const pct = Math.min(99, Math.floor((processed / total) * 100));
@@ -163,9 +176,16 @@
 
   async function runJob(phase, fn) {
     if (status.running) return { started: false, reason: 'busy' };
+    // A new job always starts moving: the gate is opened here rather than
+    // assumed, so a gate left shut by a job that ended the moment it was
+    // paused cannot stall the next one.
+    SarvaPause.resume();
     status.running = true;
     setStatus({
       phase,
+      paused: false,
+      pausedAt: null,
+      pausedMs: 0,
       processed: 0,
       total: 0,
       headerOnly: 0,
@@ -178,16 +198,36 @@
       // Flip running BEFORE the idle update: updateBadge() reads it, and
       // flipping afterwards (a finally) left the badge frozen at the last
       // percentage of a finished job.
+      SarvaPause.resume();
       status.running = false;
-      setStatus({ phase: 'idle', finishedAt: Date.now(), lastResult: result });
+      setStatus({ phase: 'idle', paused: false, pausedAt: null, finishedAt: Date.now(), lastResult: result });
       return { started: true, result };
     } catch (e) {
       const msg = String((e && e.message) || e);
       console.error(`[SarvaSearch] ${phase} failed:`, msg);
+      SarvaPause.resume();
       status.running = false;
-      setStatus({ phase: 'idle', finishedAt: Date.now(), lastError: msg });
+      setStatus({ phase: 'idle', paused: false, pausedAt: null, finishedAt: Date.now(), lastError: msg });
       return { started: true, error: msg };
     }
+  }
+
+  // Pause / resume the job in flight. Both are no-ops (reported as such) when
+  // nothing is running, and neither is allowed to start or stop a job: pause
+  // only shuts the gate the running loops check at their safe points.
+  function pauseJob() {
+    if (!status.running) return { paused: false, reason: 'idle' };
+    if (!SarvaPause.pause()) return { paused: true, already: true };
+    setStatus({ paused: true, pausedAt: Date.now() });
+    return { paused: true };
+  }
+
+  function resumeJob() {
+    if (!status.running) return { resumed: false, reason: 'idle' };
+    if (!SarvaPause.resume()) return { resumed: true, already: true };
+    const held = status.pausedAt ? Date.now() - status.pausedAt : 0;
+    setStatus({ paused: false, pausedAt: null, pausedMs: (status.pausedMs || 0) + held });
+    return { resumed: true };
   }
 
   // Full rebuild: walk every included folder, push every message. Cheap to
@@ -232,6 +272,10 @@
   }
 
   async function clearIndex() {
+    // Clearing out from under a running (or paused) job would leave its
+    // buffered docs writing into the new collection and its watermark
+    // advanced over mail that is no longer indexed. Refuse instead.
+    if (status.running) return { cleared: false, reason: 'busy' };
     await SarvaIndex.clear();
     await SarvaEvents.clearWatermarks();
     setStatus({ lastError: null, lastResult: { cleared: true }, finishedAt: Date.now() });
@@ -251,6 +295,10 @@
         return catchUp();
       case 'reconcile':
         return reconcileNow();
+      case 'pause':
+        return pauseJob();
+      case 'resume':
+        return resumeJob();
       case 'clear':
         return clearIndex();
       default:

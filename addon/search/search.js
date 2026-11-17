@@ -415,10 +415,16 @@ function progressParts(status) {
   const flags = status.headerOnly
     ? `${status.headerOnly.toLocaleString()} header-only`
     : "";
-  const headline = [label, counts, flags].filter(Boolean).join(" · ");
+  const headline = [status.paused ? `${label} — paused` : label, counts, flags]
+    .filter(Boolean)
+    .join(" · ");
 
   let pace = "";
-  const elapsedMs = status.startedAt ? Date.now() - status.startedAt : 0;
+  // Time spent paused is not time the job spent working: freeze the clock at
+  // pausedAt and subtract everything held so far, or resuming a job paused for
+  // an hour shows a rate 60x too low.
+  const endMs = status.paused && status.pausedAt ? status.pausedAt : Date.now();
+  const elapsedMs = status.startedAt ? endMs - status.startedAt - (status.pausedMs || 0) : 0;
   if (status.processed > 0 && elapsedMs > 5000) {
     const rate = Math.round((status.processed / elapsedMs) * 60000);
     if (rate > 0) {
@@ -435,6 +441,36 @@ function progressParts(status) {
   return { headline, pace };
 }
 
+// One button, two jobs: its label always states what the NEXT click does.
+function syncPauseButton(paused) {
+  const btn = document.getElementById("pause-btn");
+  if (!btn) return;
+  btn.textContent = paused ? "Resume" : "Pause";
+  btn.title = paused
+    ? "Continue the job from where it stopped."
+    : "Pause between messages: the job keeps its place, and Resume continues from there.";
+}
+
+async function togglePause() {
+  // Read the live status instead of trusting a cached flag: another window can
+  // pause it, and the job can finish, between two polls.
+  const status = await bg({ type: "getStatus" });
+  if (!status || !status.running) {
+    showToast("No index job is running");
+    return;
+  }
+  const want = status.paused ? "resume" : "pause";
+  const r = await bg({ type: want });
+  if (!r || r.reason === "idle") {
+    showToast(`Nothing to ${want}`);
+  } else if (want === "pause") {
+    showToast("Index job paused — Resume picks up where it stopped");
+  } else {
+    showToast("Index job resumed");
+  }
+  pollStatusOnce();
+}
+
 async function pollStatusOnce() {
   try {
     const status = await bg({ type: "getStatus" });
@@ -446,6 +482,8 @@ async function pollStatusOnce() {
       startPollingStatus();
       const progressEl = document.getElementById("indexer-progress");
       progressEl.classList.remove("hidden");
+      progressEl.classList.toggle("paused", !!status.paused);
+      syncPauseButton(!!status.paused);
       document.getElementById("job-error").classList.add("hidden");
       // Auto-open the management panel once per job so the bar is visible
       // without hunting for the toggle (the user can still close it).
@@ -638,6 +676,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("rebuild-btn").addEventListener("click", rebuild);
   document.getElementById("verify-btn").addEventListener("click", verify);
+  document.getElementById("pause-btn").addEventListener("click", togglePause);
 
   await initModeToggle();
   await loadAccounts();

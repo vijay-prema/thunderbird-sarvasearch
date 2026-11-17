@@ -139,6 +139,15 @@ account and Message-ID and skipped, so it cannot abort a 100k-message run that w
 restart at the same message every time; the next pass retries it, and the rebuild
 summary reports how many were skipped.
 
+**Any of these can be paused and resumed** — the control is in the index panel and on
+the Settings page (the popup's progress strip and the toolbar badge report the held
+state: `II`, an amber bar that stops moving). A pause is cooperative, not a
+cancellation: the job stops between messages (never mid-write), keeps its place, and
+Resume carries on from there — nothing is re-read, skipped, or duplicated, and the
+time spent held is not charged to the job's rate or ETA. While held the job still
+owns the index, so a second Rebuild or Verify is refused and Clear stays blocked
+until it finishes.
+
 ## The index (Qdrant collection layout)
 
 | | |
@@ -210,10 +219,13 @@ node tools/render-demo.mjs            # re-render docs/demo.gif from docs/demo-s
 
 The unit tests load the **real** `addon/lib/*.js` files (plain browser IIFEs) with fake
 `messenger`/Qdrant/Ollama objects, so a broken ranking or folder-merge rule fails here
-rather than in a mailbox.
+rather than in a mailbox. The pause suite does the same for the ingest loops: it runs
+the real `reader`/`events` code over a fake mailbox and asserts that a held job stops
+between messages and finishes exactly once after resuming.
+
 ```
 addon/
-  lib/            http, settings, text (hash + uuid5), qdrant, ollama, index, search
+  lib/            http, settings, text (hash + uuid5), pause, qdrant, ollama, index, search
   ingest/         dockey, extract (+worker), reader, open, events
   search/         search page
   options/ popup/ icons/

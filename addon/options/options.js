@@ -173,13 +173,47 @@ function jobSummary(result) {
   return "Done";
 }
 
+// The one Pause/Resume button states what the next click does, and is only
+// usable while a job is in flight (a paused job still counts as in flight).
+function syncPauseButton(status) {
+  const btn = document.getElementById("pause-btn");
+  if (!btn) return;
+  const running = !!(status && status.running);
+  const paused = running && !!status.paused;
+  btn.disabled = !running;
+  btn.textContent = paused ? "Resume" : "Pause";
+  btn.title = paused
+    ? "Continue the job from where it stopped."
+    : "Pause between messages: the job keeps its place, and Resume continues from there.";
+}
+
+async function togglePause() {
+  // Live status, not a cached flag: the job can be paused elsewhere or finish
+  // between two polls.
+  const status = await bg({ type: "getStatus" });
+  if (!status || !status.running) {
+    setJobStatus("No index job is running");
+    return;
+  }
+  const want = status.paused ? "resume" : "pause";
+  const r = await bg({ type: want });
+  if (!r || r.reason === "idle") {
+    setJobStatus(`Nothing to ${want}`);
+  } else {
+    setJobStatus(want === "pause" ? "Index job paused — Resume picks up where it stopped" : "Index job resumed");
+  }
+  startPolling();
+}
+
 async function pollJob() {
   try {
     const status = await bg({ type: "getStatus" });
     if (!status) return;
+    syncPauseButton(status);
     if (status.running || status.phase !== "idle") {
+      const counts = `${status.processed.toLocaleString()}/${status.total.toLocaleString()}`;
       setJobStatus(
-        `${status.phase}... ${status.processed.toLocaleString()}/${status.total.toLocaleString()}`
+        status.paused ? `${status.phase} paused at ${counts}` : `${status.phase}... ${counts}`
       );
     } else {
       stopPolling();
@@ -227,12 +261,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("save-btn").addEventListener("click", saveSettings);
   document.getElementById("rebuild-btn").addEventListener("click", () => runJob("rebuild", "Rebuild"));
   document.getElementById("verify-btn").addEventListener("click", () => runJob("reconcile", "Verify and repair"));
+  document.getElementById("pause-btn").addEventListener("click", togglePause);
   document.getElementById("clear-btn").addEventListener("click", async () => {
     if (!confirm("Delete the whole search index? Search finds nothing until you rebuild.")) {
       return;
     }
     try {
-      await bg({ type: "clear" });
+      const r = await bg({ type: "clear" });
+      // Refused while a job holds the index: clearing under a paused or
+      // running job would leave it writing into the new collection.
+      if (r && r.cleared === false) {
+        setJobStatus("An index job is in flight — pause is not enough, let it finish before clearing", true);
+        return;
+      }
       setJobStatus("Index cleared. Start a rebuild to re-index your mail.");
       loadHealth();
     } catch (e) {
@@ -244,6 +285,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   for (const id of ["qdrant-url", "qdrant-key", "collection", "ollama-url"]) {
     document.getElementById(id).addEventListener("change", loadHealth);
   }
+
+  // Pick up a job already in flight (started from the search page or a
+  // startup catch-up) so its progress and the Pause control are live here too.
+  const status = await bg({ type: "getStatus" }).catch(() => null);
+  if (status && status.running) startPolling();
+  else syncPauseButton(status);
 });
 
 function escapeHtml(text) {

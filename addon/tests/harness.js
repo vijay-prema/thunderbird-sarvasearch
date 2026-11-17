@@ -11,12 +11,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const LIB = path.join(__dirname, '..', 'lib');
+const INGEST = path.join(__dirname, '..', 'ingest');
 
 function loadLib(...names) {
   for (const name of names) {
     const code = fs.readFileSync(path.join(LIB, `${name}.js`), 'utf8');
     // Indirect eval: runs in global scope, so the IIFE's globalThis assignment
     // is visible to every other module.
+    (0, eval)(code);
+  }
+}
+
+// The ingest pipeline (reader/events/dockey/extract) lives outside lib/. Same
+// rule applies: load the REAL file, never a re-implementation.
+function loadIngest(...names) {
+  for (const name of names) {
+    const code = fs.readFileSync(path.join(INGEST, `${name}.js`), 'utf8');
     (0, eval)(code);
   }
 }
@@ -147,4 +157,4 @@ function installSettings(overrides = {}) {
   return settings;
 }
 
-module.exports = { loadLib, installMessenger, fakeStorage, fakeQdrant, fakeOllama, installSettings };
+module.exports = { loadLib, loadIngest, installMessenger, fakeStorage, fakeQdrant, fakeOllama, installSettings };

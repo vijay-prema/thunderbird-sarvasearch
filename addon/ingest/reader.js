@@ -201,6 +201,7 @@
   async function totalMessageCount(folders) {
     let total = 0;
     for (const f of folders) {
+      await SarvaPause.checkpoint();
       try {
         const info = await messenger.folders.getFolderInfo(f.id);
         total += (info && info.totalMessageCount) || 0;
@@ -280,6 +281,9 @@
 
     async function worker() {
       for (;;) {
+        // Pause point: a paused build parks here, between messages, so it
+        // never buffers a doc it will not flush and never skips one either.
+        await SarvaPause.checkpoint();
         const header = await nextHeader();
         if (!header) break;
         const doc = await readDoc(header, accountNames, indexEncrypted, extractor, maxBody);
@@ -308,7 +312,11 @@
     let processed = 0;
     const live = new Map();
     for (const folder of folders) {
-      await forEachHeader(folder.id, (header) => {
+      await SarvaPause.checkpoint();
+      await forEachHeader(folder.id, async (header) => {
+        // One walk of every live message: paused here, the collection resumes
+        // in the same folder with the map it has built so far.
+        await SarvaPause.checkpoint();
         const id = SarvaKey.identity(header);
         const key = id.account_id + SarvaKey.SEP + id.message_id;
         let entry = live.get(key);

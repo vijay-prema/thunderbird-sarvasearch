@@ -138,6 +138,13 @@ body {
   100% { margin-left: 100%; }
 }
 
+/* Held by the user, not stalled: amber bar, and no motion pretending to work */
+.job-strip.paused .job-fill {
+  background: #f57f17;
+  animation: none;
+  margin-left: 0;
+}
+
 .job-text {
   font-size: 11px;
   color: var(--text-secondary);

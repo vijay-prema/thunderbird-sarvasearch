@@ -34,9 +34,12 @@ async function refreshJobStrip() {
     return;
   }
   strip.classList.remove("hidden");
+  strip.classList.toggle("paused", !!s.paused);
   const fill = document.getElementById("job-fill");
   const text = document.getElementById("job-text");
-  const label = PHASE_SHORT[s.phase] || s.phase;
+  // Paused is a state of its own, not a slow percentage: say so in the strip
+  // and let the search page own the resume control.
+  const label = s.paused ? "Paused" : PHASE_SHORT[s.phase] || s.phase;
   if (s.total > 0) {
     const pct = Math.min(100, Math.floor((s.processed / s.total) * 100));
     fill.style.width = pct + "%";

@@ -60,6 +60,8 @@
       background: var(--bg-secondary); color: var(--text);
     }
     button:hover { background: var(--border); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    button:disabled:hover { background: var(--bg-secondary); }
     .btn-primary { background: var(--accent); color: white; border: none; }
     .btn-primary:hover { opacity: 0.9; }
     .btn-danger { color: var(--error); border-color: var(--error); }
@@ -154,6 +156,7 @@
   <div class="index-actions">
     <button id="rebuild-btn" title="Walk every folder and index all mail. Already-indexed messages are skipped, so this also resumes an interrupted build.">Rebuild index</button>
     <button id="verify-btn" title="Compare the index against every live message and fix any differences.">Verify and repair</button>
+    <button id="pause-btn" class="btn-pause" title="Pause between messages: the job keeps its place, and Resume continues from there." disabled>Pause</button>
     <button id="clear-btn" class="btn-danger" title="Delete the whole index (drops the Qdrant collection).">Clear index</button>
   </div>
   <div id="job-status"></div>

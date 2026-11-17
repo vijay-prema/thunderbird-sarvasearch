@@ -194,6 +194,7 @@
       includeSubFolders: true,
     });
     while (list) {
+      await SarvaPause.checkpoint();
       total += headersOf(list).length;
       list = list.id ? await messenger.messages.continueList(list.id) : null;
     }
@@ -207,6 +208,7 @@
     // overcount only makes the progress bar conservative.
     let total = 0;
     for (const f of folders || []) {
+      await SarvaPause.checkpoint();
       try {
         const info = await messenger.folders.getFolderInfo(f.id);
         total += (info && info.totalMessageCount) || 0;
@@ -255,6 +257,7 @@
     const windows = [];
     let grandTotal = 0;
     for (const account of accounts) {
+      await SarvaPause.checkpoint();
       if (indexOptions.excluded && indexOptions.excluded.has(account.id)) continue;
       const mark = (await getWatermarks())[account.id] || 0;
       const fromDate = new Date(Math.max(0, mark - overlapMs));
@@ -300,6 +303,9 @@
     // account offline mid-walk) must kill ONLY this account's pass, not the
     // whole job: the watermark stays put and the next run retries it.
     for (const { account, mark, fromDate } of windows) {
+      // Pause between accounts is a clean place to hold: the previous
+      // account's watermark is already written, this one has not started.
+      await SarvaPause.checkpoint();
       let newest = mark;
       let batch = [];
       let failedBatches = 0;
@@ -327,6 +333,9 @@
         });
 
         while (list) {
+          // Pause per page: the watermark is only advanced after the walk, so
+          // holding here loses nothing and re-walks nothing.
+          await SarvaPause.checkpoint();
           const headers = headersOf(list);
           for (const header of headers) {
             const when = dateMs(header.date);
@@ -356,6 +365,8 @@
           if (todo.length) {
             await mapPool(todo, READ_CONCURRENCY, async (header) => {
               try {
+                // The body read is the expensive step; hold before paying it.
+                await SarvaPause.checkpoint();
                 const doc = await SarvaReader.headerToDoc(header, indexOptions.indexEncrypted);
                 if (doc.header_only) headerOnly++;
                 batch.push(doc);
@@ -460,6 +471,9 @@
       }
     };
     for (const miss of missing) {
+      // Paused here, the re-ingest picks up at the same message when resumed —
+      // nothing is marked done before it is written.
+      await SarvaPause.checkpoint();
       const entry = live.get(miss.account_id + SarvaKey.SEP + miss.message_id);
       if (!entry || entry.headerId == null) {
         done++;

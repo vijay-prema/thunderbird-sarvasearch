@@ -11,6 +11,9 @@
     "build": "./build.sh"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
+  },
+  "dependencies": {
+    "24": "^0.0.0"
   }
 }
