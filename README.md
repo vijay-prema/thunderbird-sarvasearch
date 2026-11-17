@@ -1,9 +1,11 @@
-# SarvaSearch
+# SarvaSearch for Thunderbird Email
 
-*Sarva* is Sanskrit for "all" (or "every") — SarvaSearch looks through all of your
-email accounts, by meaning or by word.
+*Sarva* is Sanskrit for "all" (or "every") — Instant and awesome fuzzy meaning or keyword search, across all of your
+email accounts, with simple filtering by dates and `from:` field.
 
-Instant, local, private, and no additional login required.
+Fast, local, private, and no additional login required.
+
+<img src="docs/demo.gif" width="900" alt="SarvaSearch in action: one query returning hybrid results from two different mail accounts, narrowing the search to a single mailbox, keyword-only mode, then prefix matching on 'invo'">
 
 Hybrid **semantic + keyword** search for Thunderbird, powered entirely by services on
 your own machine. The add-on indexes the mail Thunderbird has already downloaded and
@@ -198,17 +200,17 @@ re-embedding anything.
 ## Development
 
 ```bash
-node --test addon/tests/*.test.js     # ranking, ingest rules, hashing — no services needed
+node --test addon/tests/*.test.js     # ranking, ingest rules, hashing, pause — no services needed
 node --check addon/lib/search.js      # syntax-check any file
 node tools/verify-live.js             # read-only checks against your real Qdrant+Ollama
 node tools/verify-live.js --roundtrip # + ingest/repair/delete in a throwaway collection
+node tools/render-demo.mjs            # re-render docs/demo.gif from docs/demo-source.html
 ./build.sh --dev                      # development .xpi with branch+sha
 ```
 
 The unit tests load the **real** `addon/lib/*.js` files (plain browser IIFEs) with fake
 `messenger`/Qdrant/Ollama objects, so a broken ranking or folder-merge rule fails here
 rather than in a mailbox.
-
 ```
 addon/
   lib/            http, settings, text (hash + uuid5), qdrant, ollama, index, search
@@ -217,6 +219,7 @@ addon/
   options/ popup/ icons/
   tests/          node:test suites + harness
 tools/            verify-live.js — drive the add-on's modules against live services
+docs/             demo.gif (README animation) and demo-source.html (its synthetic UI)
 ```
 
 ## Credits

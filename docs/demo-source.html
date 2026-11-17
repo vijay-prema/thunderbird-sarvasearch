@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SarvaSearch demo</title>
+<!--
+  Source of docs/demo.gif. Every visual state is a function of time: seek(t)
+  sets it, so a frame is just one screenshot at t = i / 15. The story, timings
+  and the synthetic mailbox live in T and CARDS below.
+
+  Regenerate the GIF after editing:  node tools/render-demo.mjs
+  (add --frames=/tmp/frames to keep the PNGs, --mp4 for an H.264 copy)
+-->
+
+<style>
+  :root {
+    --accent: #086A78;
+    --bg: #ffffff;
+    --bg-secondary: #f5f5f5;
+    --bg-card: #ffffff;
+    --text: #1a1a1a;
+    --text-secondary: #666666;
+    --text-muted: #999999;
+    --border: #e0e0e0;
+    --success: #2e7d32;
+    --radius: 8px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 960px; height: 750px; overflow: hidden; }
+  body {
+    font-family: "Inter", -apple-system, "Segoe UI", sans-serif;
+    background: radial-gradient(120% 100% at 50% 0%, #eef4f6 0%, #e6edf0 60%, #dfe7ea 100%);
+    color: var(--text); line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  #stage { position: relative; width: 960px; height: 750px; padding: 20px 24px 58px; }
+
+  #win {
+    width: 100%; height: 100%; background: var(--bg);
+    border: 1px solid #d7dee1; border-radius: 12px;
+    box-shadow: 0 18px 44px rgba(16, 42, 51, 0.16), 0 2px 6px rgba(16, 42, 51, 0.06);
+    overflow: hidden; display: flex; flex-direction: column;
+  }
+  header { display: flex; justify-content: space-between; align-items: center;
+           padding: 8px 20px; border-bottom: 1px solid var(--border); }
+  .header-left { display: flex; align-items: baseline; gap: 10px; }
+  header h1 { font-size: 16px; font-weight: 600; color: var(--accent); letter-spacing: -0.01em; }
+  .version-info { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .header-right { display: flex; gap: 10px; align-items: center; color: var(--text-muted); }
+  .dot-icon { width: 16px; height: 16px; fill: currentColor; opacity: .55; }
+
+  main { padding: 12px 20px; flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+  .search-bar { display: flex; gap: 8px; margin-bottom: 9px; }
+  #search-input {
+    flex: 1; padding: 7px 13px; font-size: 15px; font-family: inherit;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg); color: var(--text); outline: none;
+    display: flex; align-items: center; min-height: 37px;
+  }
+  #search-input.focused { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(8,106,120,.15); }
+  #caret { display: inline-block; width: 1.5px; height: 18px; background: var(--accent);
+           margin-left: 1px; vertical-align: -3px; }
+  .ph { color: #b0b7bb; }
+  #account-filter {
+    padding: 7px 10px; font-size: 12.5px; font-family: inherit; border: 1px solid var(--border);
+    border-radius: var(--radius); background: var(--bg); color: var(--text-secondary);
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    width: 236px; white-space: nowrap;
+  }
+  #account-filter.open { border-color: var(--accent); }
+  #account-filter .caret-down { font-size: 9px; opacity: .6; }
+  #search-btn {
+    padding: 7px 20px; font-size: 14px; font-weight: 600; font-family: inherit;
+    background: var(--accent); color: #fff; border: none; border-radius: var(--radius);
+  }
+  #search-btn.pressed { background: #065560; }
+
+  .filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin: 0 0 7px; }
+  .mode-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .mode-btn { padding: 5px 13px; font-size: 12px; font-weight: 500; font-family: inherit;
+              background: var(--bg); color: var(--text-secondary); border: none; }
+  .mode-btn + .mode-btn { border-left: 1px solid var(--border); }
+  .mode-btn.active { background: var(--accent); color: #fff; }
+  .pill { padding: 5px 10px; font-size: 12px; border: 1px solid var(--border); border-radius: var(--radius);
+          color: var(--text-secondary); background: var(--bg); white-space: nowrap; }
+  .fld { color: #b0b7bb; }
+  .date-range { display: inline-flex; align-items: center; gap: 6px; }
+  .date-val { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+
+  #status { font-size: 13px; color: var(--text-secondary); min-height: 19px; margin-bottom: 6px; }
+  #status.success { color: var(--success); }
+
+  .results { display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+  .result-card {
+    flex: 0 0 auto; padding: 8px 13px; border: 1px solid var(--border);
+    border-radius: var(--radius); background: var(--bg-card);
+  }
+  .result-card.hover { border-color: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+  .result-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .result-subject { font-weight: 600; font-size: 14px; letter-spacing: -0.005em; }
+  .result-score { font-size: 12px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .result-meta { display: flex; gap: 16px; font-size: 12.5px; color: var(--text-secondary); margin: 3px 0 4px; }
+  .result-tags { display: flex; gap: 6px; margin-bottom: 4px; }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; font-weight: 500; }
+  .badge-account { background: rgba(8,106,120,.10); color: var(--accent);
+                   max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge-folder { background: var(--bg-secondary); color: var(--text-secondary); }
+  .badge-attachment { background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--border); }
+  .result-attachments { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-bottom: 2px; }
+  .clip { font-size: 10px; opacity: .55; }
+  .result-snippet { font-size: 12.5px; color: #737d83; line-height: 1.35;
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  mark { background: transparent; color: inherit; padding: 0; }
+  .hitting mark { background: rgba(245,190,45,.34); color: #4a3a06; }
+
+  /* native-looking account dropdown */
+  #acct-menu {
+    position: absolute; display: none; min-width: 236px; padding: 4px;
+    background: #fff; border: 1px solid #cfd6d9; border-radius: 6px;
+    box-shadow: 0 10px 26px rgba(16,42,51,.18), 0 1px 3px rgba(16,42,51,.10); z-index: 20;
+  }
+  #acct-menu .row { padding: 6px 10px; font-size: 12.5px; color: var(--text); border-radius: 4px; white-space: nowrap; }
+  #acct-menu .row.selected { background: rgba(8,106,120,.10); color: var(--accent); font-weight: 600; }
+  #acct-menu .row.hover { background: #eef2f4; }
+
+  #caption {
+    position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+    background: rgba(17,32,37,.90); color: #f2f6f7; font-size: 12.5px; font-weight: 500;
+    padding: 7px 16px; border-radius: 20px; white-space: nowrap; letter-spacing: .01em;
+    box-shadow: 0 6px 18px rgba(10,30,36,.22);
+  }
+  #caption b { color: #7fd7e6; font-weight: 600; }
+
+  #cursor { position: absolute; left: 0; top: 0; width: 15px; height: 21px; pointer-events: none;
+            filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); z-index: 40; }
+
+  #outro {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 4px;
+    background: radial-gradient(90% 90% at 50% 10%, #095d6a 0%, #064751 100%);
+    color: #fff; opacity: 0;
+  }
+  #outro h2 { font-size: 40px; font-weight: 700; letter-spacing: -0.02em; }
+  #outro .tag { font-size: 15px; color: #b9e2ea; margin-bottom: 18px; }
+  #outro .stats { display: flex; gap: 10px; }
+  #outro .stat { background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.18);
+                 border-radius: 20px; padding: 6px 14px; font-size: 12px; color: #d8f0f4; }
+  #outro .stat b { color: #fff; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="win">
+    <header>
+      <div class="header-left">
+        <h1>SarvaSearch</h1>
+        <span class="version-info">addon v3.0.0 &middot; qdrant v1.20.0</span>
+      </div>
+      <div class="header-right">
+        <svg class="dot-icon" viewBox="0 0 20 20"><path d="M10 3a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z"/></svg>
+      </div>
+    </header>
+    <main>
+      <div class="search-bar">
+        <div id="search-input"><span id="typed" class="ph">Search by meaning or keywords...</span><span id="caret"></span></div>
+        <div id="account-filter"><span id="acct-label">All accounts</span><span class="caret-down">&#9662;</span></div>
+        <button id="search-btn">Search</button>
+      </div>
+
+      <div class="filter-bar">
+        <div class="mode-toggle" id="mode-toggle">
+          <button class="mode-btn active" data-mode="hybrid">Hybrid</button>
+          <button class="mode-btn" data-mode="semantic">Semantic</button>
+          <button class="mode-btn" data-mode="keyword">Keyword</button>
+        </div>
+        <span class="pill"><span class="fld">from:&nbsp;</span>sender contains</span>
+        <span class="pill">Any time <span style="font-size:9px;opacity:.6">&#9662;</span></span>
+        <span class="date-range"><span class="pill date-val">yyyy-mm-dd</span><span style="color:#bbb;font-size:11px">&ndash;</span><span class="pill date-val">yyyy-mm-dd</span></span>
+      </div>
+
+      <div id="status"></div>
+      <div class="results" id="results"></div>
+    </main>
+  </div>
+
+  <div id="acct-menu">
+    <div class="row" data-acct="all">All accounts</div>
+    <div class="row" data-acct="work">jordan.lee@example.com</div>
+    <div class="row" data-acct="home">jordan@example.net</div>
+  </div>
+
+  <div id="caption" style="opacity:0"><span id="cap-text"></span></div>
+
+  <svg id="cursor" viewBox="0 0 15 21" style="opacity:0">
+    <path d="M1 1 L1 16 L4.8 12.6 L7.1 18.6 L9.7 17.6 L7.4 11.6 L12.8 11.2 Z"
+          fill="#ffffff" stroke="#26343a" stroke-width="1.1" stroke-linejoin="round"/>
+  </svg>
+
+  <div id="outro">
+    <h2>SarvaSearch</h2>
+    <div class="tag">All your mail &mdash; by fuzzy meaning or keyword. Instant. Private.</div>
+    <div class="stats">
+      <div class="stat"><b>2</b> accounts &middot; <b>102,431</b> messages</div>
+      <div class="stat">hybrid <b>0.14 s</b></div>
+      <div class="stat">keyword <b>0.04 s</b></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- synthetic mailbox: two accounts ----------
+const QUERY = "plumbing invoice";
+const PREFIX = "invo";
+const WORK = "jordan.lee@example.com";
+const HOME = "jordan@example.net";
+
+const CARDS = [
+  {
+    id: "c1", account: WORK, folder: "Inbox",
+    subject: "Invoice 0412 — after-hours riser repair, Level 3",
+    from: "Marta Ilic", date: "12 Nov 2026",
+    hybrid: "sem #1 (87%) · kw #2", keyword: "kw #2",
+    attachments: ["invoice-0412.pdf", "quote-0412.pdf"],
+    snippet: "Burst riser in the Level 3 plant room — parts and after-hours labour as quoted, $2,480.00.",
+  },
+  {
+    id: "c2", account: WORK, folder: "Inbox",
+    subject: "Re: plumbing invoice — query on the callout fee",
+    from: "Dev Sharma", date: "10 Nov 2026",
+    hybrid: "sem #2 (84%) · kw #1", keyword: "kw #1",
+    attachments: [],
+    snippet: "The callout fee appears twice — once on the invoice and once inside the parts list.",
+  },
+  {
+    id: "c3", account: HOME, folder: "Archive",
+    subject: "Bill for fixing the pipes — Suite 12",
+    from: "Ana de Souza", date: "28 Oct 2026",
+    hybrid: "sem #3 (81%)", keyword: null,
+    attachments: [],
+    snippet: "Plumber came back Thursday and finished the job; billing for the fix is attached.",
+  },
+  {
+    id: "c4", account: WORK, folder: "Archive",
+    subject: "Statement for October — invoices attached",
+    from: "Billing", date: "31 Oct 2026",
+    hybrid: "sem #4 (78%) · kw #3", keyword: "kw #3",
+    attachments: ["statement-oct.pdf", "invoice-0398.pdf", "+2 more"],
+    snippet: "Month-end statement: two invoices still open, the rest were paid on the 14th.",
+  },
+];
+
+// ---------- timeline (31.9 s) ----------
+const T = {
+  type1: [1.60, 4.90],
+  toSearch1: [4.95, 5.28], click1: 5.30,
+  hoverCard: [6.90, 8.20],
+  toSelect1: [8.75, 9.55], clickSel1: 9.60,
+  toOpt1: [10.15, 10.62], clickOpt1: 10.70,   // pick the second mailbox
+  toSelect2: [13.45, 13.95], clickSel2: 14.00,
+  toOpt2: [14.30, 14.55], clickOpt2: 14.60,   // back to All accounts
+  toKeyword: [15.20, 16.55], click2: 16.60,
+  toInput: [20.30, 20.95], clearAt: 21.00,
+  type2: [21.05, 22.10],
+  toSearch2: [22.15, 22.50], click3: 22.55,
+  outroIn: [25.80, 26.40],
+  outroOut: [30.90, 31.50],
+  end: 31.9,
+};
+
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+const easeInOut = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+
+// ---------- DOM ----------
+const resultsEl = document.getElementById("results");
+resultsEl.innerHTML = CARDS.map((c) => `
+  <div class="result-card" id="${c.id}">
+    <div class="result-header">
+      <span class="result-subject">${c.subject}</span>
+      <span class="result-score"></span>
+    </div>
+    <div class="result-meta"><span>${c.from}</span><span>${c.date}</span></div>
+    <div class="result-tags">
+      <span class="badge badge-account" title="${c.account}">${c.account}</span>
+      <span class="badge badge-folder">${c.folder}</span>
+    </div>
+    ${c.attachments.length ? `<div class="result-attachments"><span class="clip">&#128206;</span>${c.attachments.map((a) => `<span class="badge badge-attachment">${a}</span>`).join("")}</div>` : ""}
+    <div class="result-snippet">${c.snippet}</div>
+  </div>
+`).join("");
+
+const el = {
+  typed: document.getElementById("typed"),
+  input: document.getElementById("search-input"),
+  caret: document.getElementById("caret"),
+  btn: document.getElementById("search-btn"),
+  filter: document.getElementById("account-filter"),
+  acctLabel: document.getElementById("acct-label"),
+  menu: document.getElementById("acct-menu"),
+  status: document.getElementById("status"),
+  caption: document.getElementById("caption"),
+  capText: document.getElementById("cap-text"),
+  cursor: document.getElementById("cursor"),
+  outro: document.getElementById("outro"),
+  win: document.getElementById("win"),
+  modeBtns: Array.from(document.querySelectorAll(".mode-btn")),
+};
+const rows = Array.from(el.menu.querySelectorAll(".row"));
+
+// prefix highlighting
+function markPrefix(root) {
+  const walk = (node) => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === 3) {
+        const re = /invo/gi;
+        if (!re.test(child.nodeValue)) continue;
+        const frag = document.createDocumentFragment();
+        const text = child.nodeValue;
+        let last = 0, m;
+        re.lastIndex = 0;
+        while ((m = re.exec(text))) {
+          if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+          const hit = document.createElement("mark");
+          hit.textContent = m[0];
+          frag.appendChild(hit);
+          last = m.index + m[0].length;
+        }
+        if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+        child.replaceWith(frag);
+      } else if (child.nodeType === 1 && child.tagName !== "MARK") {
+        walk(child);
+      }
+    }
+  };
+  walk(root);
+}
+
+const cards = CARDS.map((c) => {
+  const root = document.getElementById(c.id);
+  markPrefix(root.querySelector(".result-subject"));
+  return { ...c, root, score: root.querySelector(".result-score") };
+});
+
+// geometry for the cursor + dropdown
+const rectOf = (n) => n.getBoundingClientRect();
+const btnR = rectOf(el.btn), kwR = rectOf(el.modeBtns[2]), inR = rectOf(el.input), selR = rectOf(el.filter);
+
+el.menu.style.left = Math.round(selR.left) + "px";
+el.menu.style.top = Math.round(selR.bottom + 4) + "px";
+el.menu.style.display = "block"; // measure the rows once, then hide again
+const rowRects = rows.map((r) => rectOf(r));
+el.menu.style.display = "none";
+const rowCenter = (i) => ({ x: rowRects[i].left + rowRects[i].width / 2, y: rowRects[i].top + rowRects[i].height / 2 });
+
+const P = {
+  search: { x: btnR.left + btnR.width / 2 - 3, y: btnR.top + btnR.height / 2 + 3 },
+  keyword: { x: kwR.left + kwR.width / 2, y: kwR.top + kwR.height / 2 },
+  input: { x: inR.left + inR.width * 0.62, y: inR.top + inR.height / 2 },
+  select: { x: selR.left + selR.width - 20, y: selR.top + selR.height / 2 + 2 },
+  optHome: rowCenter(2),
+  optAll: rowCenter(0),
+  card1: { x: rectOf(cards[0].root).left + 220, y: rectOf(cards[0].root).top + 34 },
+  rest: { x: 640, y: 470 },
+};
+
+function move(from, to, p) {
+  return { x: from.x + (to.x - from.x) * p, y: from.y + (to.y - from.y) * p };
+}
+
+function seek(t) {
+  t = clamp(t, 0, T.end);
+  const oin = easeOut(seg(t, T.outroIn[0], T.outroIn[1]));
+  const oout = seg(t, T.outroOut[0], T.outroOut[1]);
+  const reset = oout > 0.6;
+
+  // ---- query ----
+  let typed = "", caretOn = false;
+  if (t >= T.type1[0] && t < T.clearAt) {
+    typed = QUERY.slice(0, Math.floor(seg(t, T.type1[0], T.type1[1]) * QUERY.length + 1e-6));
+    caretOn = t > T.type1[1];
+  } else if (t >= T.type2[0]) {
+    typed = PREFIX.slice(0, Math.floor(seg(t, T.type2[0], T.type2[1]) * PREFIX.length + 1e-6));
+    caretOn = t > T.type2[1];
+  }
+  if (reset) { typed = ""; caretOn = false; }
+  el.typed.textContent = typed || "Search by meaning or keywords...";
+  el.typed.className = typed ? "" : "ph";
+  el.caret.style.display = caretOn ? "inline-block" : "none";
+  el.caret.style.opacity = (t < T.type1[1] || Math.floor(t * 2.2) % 2 === 0) ? "1" : "0";
+  el.input.classList.toggle("focused", caretOn && !reset);
+
+  // ---- mode ----
+  const keywordMode = t >= T.click2 && !reset;
+  el.modeBtns.forEach((b) =>
+    b.classList.toggle("active", keywordMode ? b.dataset.mode === "keyword" : b.dataset.mode === "hybrid")
+  );
+
+  // ---- account selection ----
+  const account = (t >= T.clickOpt1 && t < T.clickOpt2 && !reset) ? "home" : "all";
+  el.acctLabel.textContent =
+    account === "home" ? HOME : "All accounts";
+  const menuOpen = !reset && ((t >= T.clickSel1 && t < T.clickOpt1) || (t >= T.clickSel2 && t < T.clickOpt2));
+  el.menu.style.display = menuOpen ? "block" : "none";
+  el.filter.classList.toggle("open", menuOpen);
+  const hoverRow = !reset && ((t >= T.toOpt1[0] && t < T.clickOpt1) || (t >= T.toOpt2[0] && t < T.clickOpt2));
+  rows.forEach((row, i) => {
+    const selected = row.dataset.acct === account;
+    row.classList.toggle("selected", selected);
+    const hovered = hoverRow && ((i === 2 && t < T.clickOpt1) || (i === 0 && t >= T.clickSel2));
+    row.classList.toggle("hover", hovered && !selected);
+  });
+
+  // ---- results: a hard cut, because this app answers in well under a frame ----
+  const phase =
+    reset ? "none"
+    : t >= T.click3 ? "prefix"
+    : t >= T.click2 ? "keyword"
+    : t >= T.click1 ? "hybrid"
+    : "none";
+
+  const inAccount = (c) => account === "all" || c.account === (account === "home" ? HOME : WORK);
+  let shown = 0;
+  cards.forEach((c) => {
+    let show = phase !== "none" && inAccount(c);
+    if (show && (phase === "keyword" || phase === "prefix")) show = !!c.keyword;
+    if (show) shown++;
+    c.root.style.display = show ? "" : "none";
+    c.score.textContent = keywordMode ? (c.keyword || "") : c.hybrid;
+  });
+
+  // ---- status line, worded like the add-on's ----
+  const plural = shown === 1 ? "result" : "results";
+  if (phase === "none") el.status.innerHTML = "";
+  else if (phase === "hybrid") {
+    el.status.innerHTML = account === "all"
+      ? `Hybrid: ${shown} results in 0.14s (semantic 118, keyword 92 candidates)`
+      : `Hybrid: ${shown} ${plural} in 0.13s (semantic 118, keyword 4 candidates)`;
+  } else if (phase === "keyword") el.status.innerHTML = `Keyword: ${shown} ${plural} in 0.04s`;
+  else el.status.innerHTML = `Keyword: ${shown} ${plural} in 0.03s`;
+  el.status.classList.toggle("success", phase !== "none");
+
+  document.body.classList.toggle("hitting", phase === "prefix");
+
+  // ---- captions ----
+  let cap = "", capA = 0;
+  const capWin = (a, b, text) => {
+    if (t >= a && t < b) {
+      cap = text;
+      capA = Math.min(seg(t, a, a + 0.25), 1 - seg(t, b - 0.25, b));
+    }
+  };
+  capWin(0.30, 5.20, "Multiple mailboxes, one index — <b>nothing leaves this machine</b>");
+  capWin(5.70, 9.30, "One query, all addresses — every card says which mailbox it came from");
+  capWin(10.10, 13.30, "Narrow it to a single mailbox — <b>0.13 s</b>");
+  capWin(17.10, 20.90, "Keyword only: <b>0.04 s</b>, no Ollama — the meaning-only hit drops out");
+  capWin(22.90, 25.90, "Prefix match: <b>invo</b> finds invoice, invoices — 0.03 s");
+  el.capText.innerHTML = cap;
+  el.caption.style.opacity = clamp(capA).toFixed(3);
+
+  // ---- cursor ----
+  let pos = null;
+  const still = (p) => { pos = p; };
+  if (t >= T.toSearch1[0] && t < T.click1 + 0.45) {
+    pos = move(P.rest, P.search, easeInOut(seg(t, T.toSearch1[0], T.toSearch1[1])));
+    el.btn.classList.toggle("pressed", Math.abs(t - T.click1) < 0.08);
+  } else if (t >= T.hoverCard[0] && t < T.hoverCard[1]) {
+    pos = move(P.search, P.card1, easeInOut(seg(t, T.hoverCard[0], T.hoverCard[0] + 0.35)));
+  } else if (t >= T.toSelect1[0] && t < T.clickSel1 + 0.3) {
+    pos = move(P.card1, P.select, easeInOut(seg(t, T.toSelect1[0], T.toSelect1[1])));
+  } else if (t >= T.toOpt1[0] && t < T.clickOpt1 + 0.1) {
+    pos = move(P.select, P.optHome, easeInOut(seg(t, T.toOpt1[0], T.toOpt1[1])));
+  } else if (t >= T.clickOpt1 && t < T.toSelect2[0]) {
+    // drift out of the way while the single-mailbox result sits on screen
+    pos = move(P.optHome, P.rest, easeInOut(seg(t, T.clickOpt1 + 0.3, T.clickOpt1 + 1.5)));
+  } else if (t >= T.toSelect2[0] && t < T.clickSel2 + 0.3) {
+    pos = move(P.rest, P.select, easeInOut(seg(t, T.toSelect2[0], T.toSelect2[1])));
+  } else if (t >= T.toOpt2[0] && t < T.clickOpt2 + 0.1) {
+    pos = move(P.select, P.optAll, easeInOut(seg(t, T.toOpt2[0], T.toOpt2[1])));
+  } else if (t >= T.clickOpt2 && t < T.toKeyword[0]) {
+    still(P.optAll);
+  } else if (t >= T.toKeyword[0] && t < T.click2 + 0.45) {
+    pos = move(P.optAll, P.keyword, easeInOut(seg(t, T.toKeyword[0], T.toKeyword[1])));
+    el.btn.classList.remove("pressed");
+  } else if (t >= T.toInput[0] && t < T.toSearch2[0]) {
+    pos = move(P.keyword, P.input, easeInOut(seg(t, T.toInput[0], T.toInput[1])));
+    if (t > T.toInput[1]) still(P.input);
+  } else if (t >= T.toSearch2[0] && t < T.click3 + 0.45) {
+    pos = move(P.input, P.search, easeInOut(seg(t, T.toSearch2[0], T.toSearch2[1])));
+    el.btn.classList.toggle("pressed", Math.abs(t - T.click3) < 0.08);
+  } else {
+    el.btn.classList.remove("pressed");
+  }
+  el.cursor.style.opacity = pos && !reset ? "1" : "0";
+  if (pos) el.cursor.style.transform = `translate(${pos.x - 2}px, ${pos.y - 2}px)`;
+
+  cards.forEach((c, i) => {
+    const hovered = i === 0 && t >= T.hoverCard[0] + 0.3 && t < T.hoverCard[1] && phase !== "none";
+    c.root.classList.toggle("hover", hovered);
+  });
+
+  // ---- title card ----
+  el.outro.style.opacity = clamp(oin * (1 - oout)).toFixed(3);
+  el.win.style.opacity = clamp(1 - oin * (1 - oout)).toFixed(3);
+}
+
+window.seek = seek;
+seek(0);
+</script>
+</body>
+</html>
