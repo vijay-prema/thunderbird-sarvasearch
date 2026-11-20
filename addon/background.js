@@ -301,6 +301,11 @@
         return resumeJob();
       case 'clear':
         return clearIndex();
+      case 'bridgeStatus':
+        return Promise.resolve(SarvaBridge.status());
+      case 'bridgeRestart':
+        SarvaBridge.restart();
+        return Promise.resolve(SarvaBridge.status());
       default:
         return undefined;
     }
@@ -377,4 +382,10 @@
 
   ensureSpaceRegistered();
   updateBadge();
+
+  // ---- Local bridge ----
+  // Answers "open this message" requests from tools/sarva.js and the bridge
+  // daemon. Long-polls a daemon that may not be running at all; that case is
+  // logged once and then retried quietly in the background.
+  SarvaBridge.start();
 })();

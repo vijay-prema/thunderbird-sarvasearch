@@ -193,6 +193,83 @@ Result cards also list the message's **attachment file names** (the first three,
 part of the embedded text, so a rebuild backfills (and corrects) them without
 re-embedding anything.
 
+## Agent access: the `sarva` CLI and the bridge
+
+The index is the whole store, so anything that can speak Qdrant can search it — and
+`tools/sarva.js` does exactly that, from outside Thunderbird:
+
+```bash
+node tools/sarva.js search "acme invoice" --limit 5
+node tools/sarva.js search "power bill" --from example-powerco --after 2026-01-01 --latest
+node tools/sarva.js search "rates notice" --json          # machine-readable, for agents
+node tools/sarva.js show  --account account2 --message-id abc@example.com
+node tools/sarva.js stats | accounts | doctor
+```
+
+The ranking is **not** re-implemented: `tools/lib/runtime.js` loads the add-on's own
+`lib/search.js`, `lib/qdrant.js`, `lib/ollama.js` and `lib/settings.js` into Node (the
+same files the test harness loads), so a CLI result is the result the search page
+would show, including the `sem #n` / `kw #n` provenance and the RRF score. Settings
+come from `~/.config/sarvasearch/config.json` (optional), merged over the add-on's
+defaults:
+
+```json
+{ "qdrantUrl": "http://127.0.0.1:6333", "collection": "sarvasearch",
+  "ollamaUrl": "http://127.0.0.1:11434", "ollamaModel": "nomic-embed-text",
+  "bridgeUrl": "http://127.0.0.1:8765", "limit": 20 }
+```
+
+### Clicking a result opens it in Thunderbird
+
+Every result carries a URL like
+`http://127.0.0.1:8765/open?account=account2&message_id=…`. A WebExtension cannot
+listen on a socket, so the direction is inverted:
+
+```
+click ──► tools/bridge.js (127.0.0.1:8765) ──► long poll ──► add-on ──► messageDisplay.open
+                     ▲                                              │
+                     └──────────────── ack {ok, error} ─────────────┘
+```
+
+- **The CLI starts it when it needs it.** `search` and `open` probe `/health` and, if
+  nothing is listening, spawn `tools/bridge.js` **detached** (`setsid`, stdio ignored)
+  and wait for it to answer. Detached matters: the daemon outlives the command that
+  started it, so the links you were just handed stay clickable. It lives until logout;
+  a later command simply respawns it if the machine rebooted. `--no-daemon` opts out,
+  and `doctor` never spawns anything.
+- One hanging `GET /pending?timeout=25` connects the add-on, so a click opens the
+  message in well under a second and the queue costs nothing while idle. The add-on
+  polls a missing daemon with backoff (5s→15s), so a daemon started on demand is
+  picked up within ~15s; a request that arrives before that stays queued rather than
+  being lost.
+- The request carries the **RFC Message-ID**, never Thunderbird's numeric id: only
+  the add-on can resolve that to the id the current session is using, and it already
+  does the re-resolution (`ingest/open.js`). A numeric id is accepted only for mail
+  that has no Message-ID.
+- `node tools/sarva.js open --account … --message-id …` does the same thing from the
+  shell and waits for the acknowledgement, so an agent can tell whether it worked.
+- The add-on side is `lib/bridge.js`: it long-polls, and if no daemon is running it
+  says so once and retries quietly with backoff. Disable or re-point it on the
+  options page (*Agent access*).
+- Opening needs a **GUI** Thunderbird — `--headless` indexes but has no window to
+  display a message in. `curl 127.0.0.1:8765/health` shows whether the add-on is
+  attached.
+
+A click that lands before the add-on has reconnected still works — the request waits
+in the daemon's queue — but the browser shows a timeout page, which looks like a
+failure. A user service avoids that entirely by keeping the daemon up:
+
+```ini
+# ~/.config/systemd/user/sarva-bridge.service
+[Unit]
+Description=SarvaSearch bridge
+[Service]
+ExecStart=/usr/bin/node %h/src/thunderbird-sarvasearch/tools/bridge.js serve
+Restart=on-failure
+[Install]
+WantedBy=default.target
+```
+
 ## Privacy & security
 
 - Everything stays on your machine: mail bodies go from Thunderbird straight to your

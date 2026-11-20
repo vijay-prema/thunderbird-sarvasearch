@@ -35,6 +35,7 @@
       "ingest/reader.js",
       "ingest/open.js",
       "ingest/events.js",
+      "lib/bridge.js",
       "background.js"
     ]
   },

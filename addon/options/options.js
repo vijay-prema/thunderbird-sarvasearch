@@ -30,7 +30,12 @@ async function renderSettings() {
   const openIn = s.openIn || "tab";
   document.querySelector(`input[name="open-in"][value="${openIn}"]`).checked = true;
 
+  document.getElementById("bridge-enabled").checked = s.bridgeEnabled !== false;
+  document.getElementById("bridge-url").value = s.bridgeUrl || "http://127.0.0.1:8765";
+  document.getElementById("bridge-token").value = s.bridgeToken || "";
+
   await renderAccountList(s.excludedAccounts || []);
+  await renderBridgeStatus();
 }
 
 async function renderAccountList(excluded) {
@@ -82,6 +87,11 @@ async function collectSettings() {
     indexEncryptedBodies: document.getElementById("index-encrypted").checked,
     bodyLimit: parseInt(document.getElementById("body-limit").value, 10) || 4000,
     excludedAccounts,
+    bridgeEnabled: document.getElementById("bridge-enabled").checked,
+    bridgeUrl:
+      document.getElementById("bridge-url").value.trim().replace(/\/+$/, "") ||
+      "http://127.0.0.1:8765",
+    bridgeToken: document.getElementById("bridge-token").value,
   };
 }
 
@@ -94,6 +104,14 @@ async function saveSettings() {
   msg.textContent = "Saved";
   setTimeout(() => (msg.textContent = ""), 2000);
   loadHealth();
+  // A new URL/token, or turning the bridge off, must take effect now rather
+  // than after the current 25-second long poll expires.
+  try {
+    await bg({ type: "bridgeRestart" });
+  } catch (e) {
+    /* background asleep — the next poll reads the saved settings anyway */
+  }
+  renderBridgeStatus();
 }
 
 // --- Health ---
@@ -142,6 +160,37 @@ async function loadHealth() {
   }
 
   el.innerHTML = qdrantLine + collectionLine + ollamaLine;
+}
+
+// --- Agent bridge (see lib/bridge.js + tools/bridge.js) ---
+
+async function renderBridgeStatus() {
+  const el = document.getElementById("bridge-status");
+  if (!el) return;
+  const row = (state, text) =>
+    `<div class="health-row"><span class="health-dot ${state === "ok" ? "ok" : "err"}"></span>${escapeHtml(text)}</div>`;
+  let st;
+  try {
+    st = await bg({ type: "bridgeStatus" });
+  } catch (e) {
+    el.innerHTML = row("err", "Bridge: background script not responding");
+    return;
+  }
+  if (!st || !st.enabled) {
+    el.innerHTML = row("err", "Bridge: off");
+    return;
+  }
+  if (st.connected) {
+    const when = st.lastOpenedAt ? new Date(st.lastOpenedAt).toLocaleTimeString() : "never";
+    el.innerHTML =
+      row("ok", `Bridge: connected to ${st.url} — ${st.opened} opened, last ${when}`) +
+      (st.lastError ? row("err", `Last error: ${st.lastError}`) : "");
+  } else {
+    el.innerHTML = row(
+      "err",
+      `Bridge: no daemon at ${st.url || "(not set)"} — start it with: node tools/bridge.js serve`
+    );
+  }
 }
 
 // --- Index jobs (run in the background script) ---

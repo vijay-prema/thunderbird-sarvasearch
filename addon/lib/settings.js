@@ -24,6 +24,12 @@
     indexEncryptedBodies: false,
     bodyLimit: 4000,
     excludedAccounts: [],
+    // bridge: the localhost daemon the add-on long-polls for "open this
+    // message" requests (tools/bridge.js). Off would only be right on a shared
+    // machine; enabled, it costs one hanging GET and nothing else.
+    bridgeEnabled: true,
+    bridgeUrl: 'http://127.0.0.1:8765',
+    bridgeToken: '',
     embedBatch: 64,
     // ranking
     keywordWeights: { subject: 8, from: 4, to: 2, body: 1 },

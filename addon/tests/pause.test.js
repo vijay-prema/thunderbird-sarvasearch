@@ -439,6 +439,15 @@ function loadBackground() {
     messages: {},
   };
 
+  // The bridge (lib/bridge.js) is covered by bridge.test.js; here it only has
+  // to exist, because background.js starts it at the end of its IIFE.
+  globalThis.SarvaBridge = {
+    start: () => {},
+    stop: () => {},
+    restart: () => {},
+    status: () => ({ enabled: false, connected: false, url: '' }),
+  };
+
   const code = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
   (0, eval)(code);
   return { send: (msg) => onMessage(msg), badge };

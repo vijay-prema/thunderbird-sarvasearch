@@ -39,6 +39,12 @@ const QDRANT = process.env.QDRANT_URL || 'http://127.0.0.1:6333';
 const OLLAMA = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const COLLECTION = process.env.COLLECTION || 'sarvasearch';
 
+// Checks that need a known correspondent in the real index take it from here,
+// so the repo never names a real sender. Set SARVA_VERIFY_SENDER (a token that
+// appears in at least one sender) to exercise the from-filter check; without it
+// that one check is skipped rather than silently passing on zero results.
+const VERIFY_SENDER = process.env.SARVA_VERIFY_SENDER || '';
+
 let failures = 0;
 function check(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
@@ -79,7 +85,7 @@ async function main() {
   console.log(`accounts: ${stats.accounts.map((a) => `${a.account_id}=${a.count}`).join(' ')}`);
   check('index has messages', stats.total_emails > 0, String(stats.total_emails));
 
-  for (const [mode, query] of [['keyword', 'invo'], ['semantic', 'plumbing invoice'], ['hybrid', 'acme invoice']]) {
+  for (const [mode, query] of [['keyword', 'invo'], ['semantic', 'plumbing invoice'], ['hybrid', 'quarterly invoice']]) {
     const [res, ms] = await timed(() => globalThis.SarvaSearch.search({ query, mode, limit: 5 }));
     await show(`${mode}: ${JSON.stringify(query)}`, res, ms);
     check(`${mode} search returned results`, res.results.length > 0);
@@ -87,12 +93,18 @@ async function main() {
       res.results.every((r) => r.message_id && r.account && typeof r.date_ms === 'number'));
   }
 
-  const [filtered, fms] = await timed(() =>
-    globalThis.SarvaSearch.search({ query: 'invoice', mode: 'hybrid', limit: 5, from: 'acme', after: '2024-01-01' })
-  );
-  await show(`filtered: invoice from:acme after:2024-01-01`, filtered, fms);
-  check('from filter only returns that sender',
-    filtered.results.every((r) => r.from.toLowerCase().includes('acme')), `${filtered.results.length} results`);
+  if (!VERIFY_SENDER) {
+    console.log('\nskip  from-filter check — set SARVA_VERIFY_SENDER to a sender token in your index');
+  } else {
+    const [filtered, fms] = await timed(() =>
+      globalThis.SarvaSearch.search({ query: 'invoice', mode: 'hybrid', limit: 5, from: VERIFY_SENDER, after: '2024-01-01' })
+    );
+    await show(`filtered: invoice from:${VERIFY_SENDER} after:2024-01-01`, filtered, fms);
+    check('from filter returns results',
+      filtered.results.length > 0, `${filtered.results.length} results`);
+    check('from filter only returns that sender',
+      filtered.results.every((r) => r.from.toLowerCase().includes(VERIFY_SENDER.toLowerCase())), `${filtered.results.length} results`);
+  }
 
   const keywords = await timed(() => globalThis.SarvaSearch.search({ query: 'invo', mode: 'keyword', limit: 5 }));
   check('prefix query "invo" matched (search-as-you-type)', keywords[0].results.length > 0, `${keywords[1]}ms`);

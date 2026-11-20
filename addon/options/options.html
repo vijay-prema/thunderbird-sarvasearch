@@ -129,6 +129,28 @@
     </div>
   </div>
 
+  <!-- Agent access -->
+  <h2>Agent access</h2>
+  <div class="field">
+    <div class="checkbox-row">
+      <input type="checkbox" id="bridge-enabled">
+      <label for="bridge-enabled">Let local tools open messages in Thunderbird
+        <span class="hint">A localhost daemon hands this add-on "open this message" requests from <code>tools/sarva.js</code>, so a search result is a clickable link. The add-on long-polls the daemon; if it is not running, nothing else is affected.</span>
+      </label>
+    </div>
+  </div>
+  <div class="field">
+    <label for="bridge-url">Bridge URL</label>
+    <input type="text" id="bridge-url" placeholder="http://127.0.0.1:8765">
+    <span class="hint">Must match the daemon's <code>--port</code> / <code>--host</code>.</span>
+  </div>
+  <div class="field">
+    <label for="bridge-token">Bridge token (optional)</label>
+    <input type="password" id="bridge-token" placeholder="Leave empty for a localhost-only bridge">
+    <span class="hint">If set, it must equal the daemon's <code>--token</code>. Any local process can otherwise ask Thunderbird to open a message — harmless, but noisy.</span>
+  </div>
+  <div class="field" id="bridge-status"></div>
+
   <!-- Indexing -->
   <h2>Indexing</h2>
   <div class="field">
