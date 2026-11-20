@@ -93,6 +93,46 @@
     return body.slice(0, max || 200);
   }
 
+  // ---- URLs in a body preview ----
+  // A snippet is the first N characters of the body, so a URL that crosses that
+  // cut arrives here as a prefix. Opening a prefix navigates somewhere else (a
+  // 404, or worse, a different page), so the page completes it from the stored
+  // body before opening it.
+
+  // Prose wraps URLs in punctuation far more often than a URL ends with it. A
+  // closing bracket is kept when the URL opened one itself: the ")" in
+  // ".../wiki/Foo_(bar)" belongs to the address.
+  function trimUrlTail(url) {
+    let out = String(url || '').replace(/[.,;:!?'"”’]+$/, '');
+    const pairs = { ')': '(', ']': '[', '}': '{' };
+    for (;;) {
+      const last = out.slice(-1);
+      const opener = pairs[last];
+      if (!opener) return out;
+      const opens = out.split(opener).length - 1;
+      const closes = out.split(last).length - 1;
+      if (closes <= opens) return out;
+      out = out.slice(0, -1);
+    }
+  }
+
+  // The full URL that starts with `partial`, read from the longer body text.
+  // `offset` is where the URL sat in the snippet, which is the same offset in the
+  // body when the snippet is a raw prefix of it — that pins the right instance
+  // when the same address appears twice. Returns `partial` when the body cannot
+  // extend it (the body is capped too, so a URL can straddle that cap instead).
+  function extendUrl(body, partial, offset) {
+    const text = String(body || '');
+    if (!partial) return partial;
+    let at = -1;
+    if (Number.isInteger(offset) && offset >= 0 && text.startsWith(partial, offset)) at = offset;
+    if (at < 0) at = text.indexOf(partial);
+    if (at < 0) return partial;
+    let end = at + partial.length;
+    while (end < text.length && !/[\s<>"'`]/.test(text[end])) end += 1;
+    return trimUrlTail(text.slice(at, end));
+  }
+
   globalThis.SarvaText = {
     repair,
     repairDoc,
@@ -102,5 +142,7 @@
     uuid5,
     pointId,
     snippetOf,
+    trimUrlTail,
+    extendUrl,
   };
 })();

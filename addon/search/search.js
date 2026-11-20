@@ -77,6 +77,10 @@ async function doSearch() {
     statusEl.className =
       count === 0 ? "status empty" : data.mode_used !== data.mode ? "status" : "status success";
 
+    // Colours are resolved per search, not once per page: the options page can
+    // change one in another tab between two searches.
+    await refreshAccountColors();
+
     for (const r of data.results) {
       resultsEl.appendChild(createResultCard(r, data.mode_used));
     }
@@ -111,11 +115,22 @@ function scoreDisplay(result, modeUsed) {
 function createResultCard(result, modeUsed) {
   const card = document.createElement("div");
   card.className = "result-card";
-  card.addEventListener("click", () => openEmail(result));
+  card.addEventListener("mousedown", (e) => (pressAt = { x: e.clientX, y: e.clientY }));
+  card.addEventListener("click", (e) => {
+    const press = pressAt;
+    pressAt = null;
+    if (endsSelection(e, card, press)) return;
+    openEmail(result);
+  });
 
   const score = scoreDisplay(result, modeUsed);
   const date = formatDate(result.date);
   const folders = Array.isArray(result.folders) ? result.folders.join(", ") : result.folder || "";
+  const account = SarvaAccountColors.colorFor(result.account);
+  const accountName = accountNameOf(result.account, result.account_name);
+  // The left edge and the badge dot carry the colour; the badge background only
+  // tints, so the name stays readable whatever the colour is.
+  card.style.setProperty("--account-color", account.color);
   const flags = [];
   if (result.header_only) flags.push('<span class="badge badge-flag" title="Body not downloaded when indexed — enable offline sync for that folder and rebuild.">header only</span>');
   if (result.encrypted) flags.push('<span class="badge badge-flag" title="Encrypted message — indexed by header only unless you opt in to indexing encrypted bodies.">encrypted</span>');
@@ -130,43 +145,290 @@ function createResultCard(result, modeUsed) {
       <span class="result-date">${escapeHtml(date)}</span>
     </div>
     <div class="result-tags">
-      <span class="badge badge-account">${escapeHtml(accountNameOf(result.account, result.account_name))}</span>
+      <span class="badge badge-account" style="background: ${account.color}22; border-color: ${account.color}" title="${escapeAttr(`${accountName} — ${account.label}`)}"><span class="account-dot" style="background: ${account.color}" aria-hidden="true"></span>${escapeHtml(accountName)}</span>
       <span class="badge badge-folder">${escapeHtml(folders)}</span>
       ${flags.join("")}
     </div>
-    ${attachmentsHtml(result)}
-    <div class="result-snippet">${escapeHtml(result.snippet || "")}</div>
   `;
 
+  const attachments = attachmentsNode(result);
+  if (attachments) card.appendChild(attachments);
+  card.appendChild(snippetNode(result.snippet, result));
+
   return card;
+}
+
+// --- Selecting text vs opening something ---
+
+// The mousedown a click ends with (see createResultCard): if the pointer moved,
+// the gesture was a text selection, not a click.
+let pressAt = null;
+
+// A click that ends a drag, or that lands with a live selection inside `el`, is
+// the end of a selection gesture — it must not open anything. The check is
+// scoped to `el` so a selection in another card never blocks this one.
+function endsSelection(e, el, press) {
+  if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) return true;
+  return selectionInside(el);
+}
+
+function selectionInside(el) {
+  const sel = window.getSelection && window.getSelection();
+  if (!sel || sel.isCollapsed || !String(sel).trim()) return false;
+  try {
+    return sel.containsNode ? sel.containsNode(el, true) : false;
+  } catch (e) {
+    return false;
+  }
+}
+
+// --- Snippet preview ---
+
+// A body preview with a URL in it should be one click from the browser. Only
+// http(s) (and a bare "www.") becomes a link — any other scheme is a click that
+// does something the user did not ask for.
+const URL_PATTERN = /\b(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
+
+function snippetNode(text, result) {
+  const el = document.createElement("div");
+  el.className = "result-snippet";
+  const value = String(text == null ? "" : text);
+  let at = 0;
+  for (const match of value.matchAll(URL_PATTERN)) {
+    const url = SarvaText.trimUrlTail(match[0]);
+    if (!url.replace(/^https?:\/\//i, "").replace(/^www\./i, "")) continue;
+    if (match.index > at) el.appendChild(document.createTextNode(value.slice(at, match.index)));
+    // The stored snippet is the body's first N characters, so a URL running to
+    // its end may be half an address. Only punctuation after it counts as
+    // "followed by prose", which means the URL really ended.
+    const after = match[0].slice(url.length);
+    const cut = match.index + match[0].length === value.length && /^[.,;:!?'"”’)\]}]*$/.test(after);
+    el.appendChild(linkNode(url, result, cut, match.index));
+    at = match.index + url.length;
+  }
+  if (at < value.length) el.appendChild(document.createTextNode(value.slice(at)));
+  return el;
+}
+
+function hrefFor(url) {
+  return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+}
+
+function linkNode(url, result, cut, offset) {
+  const a = document.createElement("a");
+  a.className = cut ? "snippet-link snippet-link-cut" : "snippet-link";
+  a.dataset.url = url; // what the preview showed — possibly a prefix
+  a.dataset.offset = String(offset == null ? "" : offset);
+  a.href = hrefFor(url);
+  a.textContent = url;
+  a.title = cut
+    ? `Open in your browser (the preview may cut this address short): ${hrefFor(url)}`
+    : `Open in your browser: ${hrefFor(url)}`;
+  // The card under the link opens the message: stop the click there, in every
+  // button, or a link opens a message and a browser tab.
+  let press = null;
+  a.addEventListener("mousedown", (e) => (press = { x: e.clientX, y: e.clientY }));
+  const open = (e) => {
+    const started = press;
+    press = null;
+    // Dragging across the address is a selection, not a click on the link.
+    if (endsSelection(e, a.closest(".result-card") || a, started)) return;
+    resolveAndOpen(a, result);
+  };
+  a.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    open(e);
+  });
+  a.addEventListener("auxclick", (e) => {
+    if (e.button !== 1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    open(e);
+  });
+  // Hover is intent: complete the address before the click, so a truncated URL
+  // opens the right page with no wait.
+  if (cut) a.addEventListener("mouseenter", () => resolveLink(a, result));
+  return a;
+}
+
+// Payload bodies, by message. Hovering and then clicking must not re-fetch one,
+// and a search page never holds more than a handful of cards.
+const bodyCache = new Map();
+const pendingLinks = new WeakMap();
+
+async function bodyOf(result) {
+  const account = String(result.account || "");
+  const messageId = String(result.message_id || "");
+  const key = `${account}\u0000${messageId}`;
+  const cached = bodyCache.get(key);
+  if (cached) return cached;
+  const fetching = (async () => {
+    // Same derivation lib/search.js uses: the point id is uuid5(account|id).
+    const pointId = await SarvaText.pointId(account, messageId);
+    const points = await SarvaQdrant.retrieve([pointId]);
+    return (points && points[0] && points[0].payload && points[0].payload.body) || "";
+  })();
+  bodyCache.set(key, fetching);
+  if (bodyCache.size > 50) bodyCache.delete(bodyCache.keys().next().value);
+  return fetching;
+}
+
+// The anchor's URL as the preview showed it, replaced by the whole address the
+// stored body carries. A failed lookup leaves it alone and lets a later click
+// try again.
+function resolveLink(a, result) {
+  const shown = a.dataset.url || "";
+  if (!a.classList.contains("snippet-link-cut")) return Promise.resolve(hrefFor(shown));
+  const pending = pendingLinks.get(a);
+  if (pending) return pending;
+
+  const work = (async () => {
+    let full = shown;
+    try {
+      const offset = Number.parseInt(a.dataset.offset, 10);
+      full = SarvaText.extendUrl(await bodyOf(result), shown, Number.isNaN(offset) ? undefined : offset) || shown;
+    } catch (e) {
+      // The index is unreachable or the body is gone: open the prefix, as before.
+      pendingLinks.delete(a);
+      return hrefFor(shown);
+    }
+    if (full !== shown) {
+      // We know the whole address now: show it, so the card stops looking cut.
+      a.dataset.url = full;
+      a.textContent = full;
+      a.href = hrefFor(full);
+      a.title = `Open in your browser: ${hrefFor(full)}`;
+      a.classList.remove("snippet-link-cut");
+    }
+    return hrefFor(full);
+  })();
+  pendingLinks.set(a, work);
+  return work;
+}
+
+// A click must never hang on a slow index: after a moment it opens what it has,
+// and the repair still lands on the card when it arrives.
+const RESOLVE_TIMEOUT_MS = 1200;
+
+async function resolveAndOpen(a, result) {
+  a.classList.add("busy");
+  let href = hrefFor(a.dataset.url || "");
+  try {
+    const resolved = await Promise.race([
+      resolveLink(a, result),
+      new Promise((r) => setTimeout(() => r(null), RESOLVE_TIMEOUT_MS)),
+    ]);
+    if (resolved) href = resolved;
+  } finally {
+    a.classList.remove("busy");
+    openInBrowser(href);
+  }
+}
+
+function openInBrowser(url) {
+  try {
+    const opening = messenger.windows.openDefaultBrowser(url);
+    if (opening && typeof opening.catch === "function") opening.catch(() => {});
+  } catch (e) {
+    window.open(url, "_blank", "noopener");
+  }
+}
+
+async function refreshAccountColors() {
+  try {
+    await SarvaAccountColors.load();
+  } catch (e) {
+    // A colour is decoration: never fail a search over one.
+  }
 }
 
 // Attachment names indexed for this message: the first few, then a "+N more"
 // badge (the count only — hovering it lists the rest). Names are captured at
 // index time; messages indexed before that was recorded show none until the
 // next rebuild backfills them (no re-embedding involved).
+//
+// Each chip opens that attachment and nothing else — the whole point of the
+// chip, given the card it sits in opens the email.
 const MAX_ATTACHMENT_BADGES = 3;
 
-function attachmentsHtml(result) {
+function attachmentsNode(result) {
   const names = Array.isArray(result.attachments) ? result.attachments.filter(Boolean) : [];
-  if (!names.length) return "";
+  if (!names.length) return null;
+
+  const row = document.createElement("div");
+  row.className = "result-attachments";
+  row.title = `${names.length} attachment${names.length === 1 ? "" : "s"}`;
+
+  const icon = document.createElement("span");
+  icon.className = "attach-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = "📎";
+  row.appendChild(icon);
+
   const shown = names.slice(0, MAX_ATTACHMENT_BADGES);
   const rest = names.slice(MAX_ATTACHMENT_BADGES);
-  const badges = shown.map(
-    (name) =>
-      `<span class="badge badge-attachment" title="${escapeAttr(name)}">${escapeHtml(name)}</span>`
-  );
+  shown.forEach((name, index) => {
+    const chip = document.createElement("span");
+    chip.className = "badge badge-attachment";
+    chip.textContent = name;
+    chip.title = `Open ${name}`;
+    let press = null;
+    chip.addEventListener("mousedown", (e) => (press = { x: e.clientX, y: e.clientY }));
+    chip.addEventListener("click", (e) => {
+      // Not the card: opening the message instead of the attachment is exactly
+      // what this control exists to avoid. A drag across the name is a
+      // selection, though, and must not open the attachment either.
+      e.preventDefault();
+      e.stopPropagation();
+      const started = press;
+      press = null;
+      if (endsSelection(e, chip, started)) return;
+      openAttachment(result, name, index, chip);
+    });
+    row.appendChild(chip);
+  });
   if (rest.length) {
-    badges.push(
-      `<span class="badge badge-attachment badge-more" title="${escapeAttr(rest.join(", "))}">+${rest.length} more</span>`
-    );
+    const more = document.createElement("span");
+    more.className = "badge badge-attachment badge-more";
+    more.textContent = `+${rest.length} more`;
+    more.title = rest.join(", ");
+    // A count, not a target — but a click on it must not open the message either.
+    more.addEventListener("click", (e) => e.stopPropagation());
+    row.appendChild(more);
   }
-  const label = `${names.length} attachment${names.length === 1 ? "" : "s"}`;
-  return `
-    <div class="result-attachments" title="${escapeAttr(label)}">
-      <span class="attach-icon" aria-hidden="true">📎</span>
-      ${badges.join("")}
-    </div>`;
+  return row;
+}
+
+async function openAttachment(result, name, index, chip) {
+  if (chip.classList.contains("pending")) return;
+  chip.classList.add("pending");
+  try {
+    const outcome = await SarvaAttach.open(
+      {
+        headerMessageId: (result.message_id || "").replace(/^<|>$/g, ""),
+        numeric_id: result.numeric_id != null ? Number(result.numeric_id) : null,
+        account_id: result.account,
+      },
+      { name, index }
+    );
+    if (outcome.ok) return;
+    showToast(attachmentError(name, outcome));
+  } catch (e) {
+    showToast(`Could not open “${name}”: ${e.message}`);
+  } finally {
+    chip.classList.remove("pending");
+  }
+}
+
+function attachmentError(name, outcome) {
+  if (outcome.reason === "message-not-found") {
+    return "Email not found in Thunderbird. It may have been deleted or not synced yet.";
+  }
+  if (outcome.reason === "attachment-missing") {
+    return `“${name}” is no longer attached to this message — open the email to see what is.`;
+  }
+  return `Could not open “${name}”: ${outcome.error || outcome.reason}`;
 }
 
 async function openEmail(result) {

@@ -24,6 +24,10 @@
     indexEncryptedBodies: false,
     bodyLimit: 4000,
     excludedAccounts: [],
+    // accountId -> "#rrggbb": what the result cards use for the account badge.
+    // Empty means "follow Thunderbird's own colour" (the bridge daemon reads it
+    // out of the profile) and, failing that, a colour derived from the id.
+    accountColors: {},
     // bridge: the localhost daemon the add-on long-polls for "open this
     // message" requests (tools/bridge.js). Off would only be right on a shared
     // machine; enabled, it costs one hanging GET and nothing else.
@@ -43,10 +47,28 @@
     const merged = { ...DEFAULTS, ...(raw || {}) };
     // Nested object: never let a stale flat value win over the defaults.
     merged.keywordWeights = { ...DEFAULTS.keywordWeights, ...((raw && raw.keywordWeights) || {}) };
+    merged.accountColors = validColors(raw && raw.accountColors);
     merged.qdrantUrl = String(merged.qdrantUrl || DEFAULTS.qdrantUrl).replace(/\/+$/, '');
     merged.ollamaUrl = String(merged.ollamaUrl || DEFAULTS.ollamaUrl).replace(/\/+$/, '');
     merged.collection = String(merged.collection || DEFAULTS.collection).trim() || DEFAULTS.collection;
     return merged;
+  }
+
+  // A colour ends up in an inline style, so only a plain #rrggbb gets through —
+  // an "auto" account simply has no entry.
+  function validColors(map) {
+    const out = {};
+    if (!map || typeof map !== 'object') return out;
+    for (const [account, value] of Object.entries(map)) {
+      if (typeof value !== 'string') continue;
+      const hex = value.trim().toLowerCase();
+      if (/^#[0-9a-f]{3}$/.test(hex)) {
+        out[account] = '#' + hex.slice(1).split('').map((c) => c + c).join('');
+      } else if (/^#[0-9a-f]{6}$/.test(hex)) {
+        out[account] = hex;
+      }
+    }
+    return out;
   }
 
   async function get() {

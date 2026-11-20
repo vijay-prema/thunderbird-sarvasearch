@@ -189,9 +189,40 @@ poorly on relevance is visibly just that. If Ollama is down, hybrid silently
 degrades to keyword-only and says so in the status line.
 
 Result cards also list the message's **attachment file names** (the first three, then
-`+N more`, with the rest in the tooltip). Names are captured at index time and are not
-part of the embedded text, so a rebuild backfills (and corrects) them without
-re-embedding anything.
+`+N more`, with the rest in the tooltip). Clicking a chip opens **that attachment on its
+own** — the system handler for the file type, or Thunderbird's own viewer for a PDF —
+and never the whole email. The indexed name is matched against Thunderbird's live
+attachment list (`listAttachments`) to find the MIME part `openAttachment` needs, with
+the indexed position breaking ties between two files of the same name; if the name is
+gone since the message was indexed the card says so instead of opening something else.
+Names are captured at index time and are not part of the embedded text, so a rebuild
+backfills (and corrects) them without re-embedding anything.
+
+Text in a card stays selectable: a click that ends a drag, or that lands with a live
+selection, selects instead of opening — the card, its preview links and its attachment
+chips all ignore a selection gesture.
+
+### Which account is this?
+
+Each card carries its account's **colour** — the same colour Thunderbird shows for that
+account — down its left edge and as a dot in the account badge, so a result is
+identifiable before you read the sender. No WebExtension API exposes account colours
+(the accounts API has no `color` property), so the colour comes from the profile:
+`tools/bridge.js` reads `folderTree.json` and `prefs.js` and serves it on
+`/accounts/colors`. When the daemon is not running, the options page's per-account
+swatch is used instead, and failing that a colour derived from the account id — the
+badge tooltip always says which of the three you are looking at. Pick a colour on the
+options page to override Thunderbird's for that account; **auto** goes back to it.
+
+URLs in the body preview are clickable and open in your **default browser** without
+opening the message: only `http(s)` and bare `www.` are linked, and a click on a link
+never triggers the card's open-in-Thunderbird.
+
+The preview is the body's first 200 characters, so a URL that crosses that cut arrives
+as a prefix — and opening a prefix lands on a different page. Cards complete a cut-off
+address from the indexed body before opening it (hovering does the lookup in advance),
+then show the whole address; if the index cannot answer within a moment they open what
+the preview showed, exactly as before.
 
 ## Agent access: the `sarva` CLI and the bridge
 
@@ -251,6 +282,11 @@ click ──► tools/bridge.js (127.0.0.1:8765) ──► long poll ──► a
 - The add-on side is `lib/bridge.js`: it long-polls, and if no daemon is running it
   says so once and retries quietly with backoff. Disable or re-point it on the
   options page (*Agent access*).
+- The daemon also answers `GET /accounts/colors`: the account colours it reads out of
+  the profile (`folderTree.json` + `prefs.js`; `--profile DIR` or `SARVA_PROFILE`
+  overrides the autodetection). It is what puts each result card in its account's
+  colour — see *Which account is this?*. Reading a profile needs no other permission,
+  and the endpoint sits behind the same optional token as the queue.
 - Opening needs a **GUI** Thunderbird — `--headless` indexes but has no window to
   display a message in. `curl 127.0.0.1:8765/health` shows whether the add-on is
   attached.

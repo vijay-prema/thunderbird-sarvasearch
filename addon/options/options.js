@@ -52,19 +52,62 @@ async function renderAccountList(excluded) {
     container.innerHTML = '<span class="hint">No mail accounts found</span>';
     return;
   }
+  // One colour source for everything below: Thunderbird's own colour when the
+  // bridge can read it, otherwise what is saved here, otherwise generated.
+  await SarvaAccountColors.load({ force: true });
+
   for (const account of accounts) {
     const row = document.createElement("div");
-    row.className = "checkbox-row";
+    row.className = "account-row";
+
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.id = `acct-${account.id}`;
     cb.dataset.accountId = account.id;
     cb.checked = !excluded.includes(account.id);
+
     const label = document.createElement("label");
     label.htmlFor = cb.id;
     label.textContent = account.name || account.id;
+
+    const colour = SarvaAccountColors.colorFor(account.id);
+    const swatch = document.createElement("input");
+    swatch.type = "color";
+    swatch.className = "account-color";
+    swatch.dataset.accountId = account.id;
+    // Remember what "following Thunderbird" means for this account: saving a
+    // value equal to it keeps the account on automatic, so a colour changed in
+    // Thunderbird later still comes through.
+    swatch.dataset.auto = colour.color;
+    swatch.value = colour.color;
+    swatch.title = `Colour used for this account on the search results — ${colour.label.toLowerCase()}`;
+
+    const source = document.createElement("span");
+    source.className = "color-source";
+
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "color-reset";
+    reset.textContent = "auto";
+    reset.title = "Follow Thunderbird's colour for this account again";
+    reset.addEventListener("click", () => {
+      swatch.value = swatch.dataset.auto;
+      syncSource();
+    });
+
+    function syncSource() {
+      const custom = swatch.value.toLowerCase() !== swatch.dataset.auto.toLowerCase();
+      source.textContent = custom ? "set here" : colour.source === "thunderbird" ? "Thunderbird" : colour.source;
+      reset.hidden = !custom;
+    }
+    swatch.addEventListener("input", syncSource);
+    syncSource();
+
     row.appendChild(cb);
     row.appendChild(label);
+    row.appendChild(swatch);
+    row.appendChild(reset);
+    row.appendChild(source);
     container.appendChild(row);
   }
 }
@@ -73,6 +116,15 @@ async function collectSettings() {
   const excludedAccounts = [];
   for (const cb of document.querySelectorAll("#account-list input[type=checkbox]")) {
     if (!cb.checked) excludedAccounts.push(cb.dataset.accountId);
+  }
+  // Only accounts whose colour was actually changed are stored; the rest keep
+  // following Thunderbird (see renderAccountList).
+  const accountColors = {};
+  for (const swatch of document.querySelectorAll("#account-list input.account-color")) {
+    const value = swatch.value.toLowerCase();
+    if (value !== String(swatch.dataset.auto || "").toLowerCase()) {
+      accountColors[swatch.dataset.accountId] = value;
+    }
   }
   return {
     qdrantUrl: document.getElementById("qdrant-url").value.trim().replace(/\/+$/, ""),
@@ -87,6 +139,7 @@ async function collectSettings() {
     indexEncryptedBodies: document.getElementById("index-encrypted").checked,
     bodyLimit: parseInt(document.getElementById("body-limit").value, 10) || 4000,
     excludedAccounts,
+    accountColors,
     bridgeEnabled: document.getElementById("bridge-enabled").checked,
     bridgeUrl:
       document.getElementById("bridge-url").value.trim().replace(/\/+$/, "") ||

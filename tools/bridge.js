@@ -14,6 +14,8 @@
 //   GET  /open?account=&message_id=[&location=&format=json&wait=10]
 //                              enqueue (this is the clickable link)
 //   POST /open                 same, JSON body
+//   GET  /accounts/colors      accountKey -> "#rrggbb", read from the
+//                              Thunderbird profile (see tools/lib/account-colors.js)
 //   GET  /health               queue depth, connected clients, last ack
 //   GET  /                     tiny status page
 //
@@ -25,18 +27,23 @@
 
 const http = require('node:http');
 const crypto = require('node:crypto');
+const { readAccountColors } = require('./lib/account-colors');
 
 const DEFAULT_PORT = 8765;
 const DEFAULT_HOST = '127.0.0.1';
 const MAX_QUEUE = 50;
 const PENDING_MAX_S = 25;
 const ACK_WAIT_MS = 10000;
+// Reading the profile is cheap but not free (prefs.js of a big profile is a
+// few hundred KB), and a colour changes about once a year — so the add-on can
+// ask on every page load without it costing anything.
+const COLORS_TTL_MS = 60000;
 
 function newId() {
   return crypto.randomBytes(8).toString('hex');
 }
 
-function createServer({ token = '', log = () => {} } = {}) {
+function createServer({ token = '', log = () => {}, profile = '' } = {}) {
   /** @type {Array<object>} */
   const queue = [];
   /** @type {Map<string, {ok: boolean, error: string|null, at: number}>} */
@@ -44,6 +51,23 @@ function createServer({ token = '', log = () => {} } = {}) {
   /** @type {Set<{res: import('node:http').ServerResponse, timer: NodeJS.Timeout}>} */
   const waiters = new Set();
   const stats = { enqueued: 0, delivered: 0, acked: 0, failed: 0, startedAt: Date.now(), lastAckAt: null };
+  /** @type {{at: number, value: object}|null} */
+  let colorCache = null;
+
+  // Errors are reported, not thrown: an unreadable profile means "no colours",
+  // which the add-on already handles, and it must not take the queue down.
+  function accountColors() {
+    const now = Date.now();
+    if (colorCache && now - colorCache.at < COLORS_TTL_MS) return colorCache.value;
+    let value;
+    try {
+      value = readAccountColors({ profile: profile || undefined });
+    } catch (e) {
+      value = { profile: null, colors: {}, error: e.message };
+    }
+    colorCache = { at: now, value };
+    return value;
+  }
 
   function authorised(req) {
     if (!token) return true;
@@ -154,6 +178,11 @@ function createServer({ token = '', log = () => {} } = {}) {
     if (!authorised(req)) return json(res, 401, { ok: false, error: 'bad or missing x-sarva-bridge-token' });
 
     // ---- addon side ----
+    if (url.pathname === '/accounts/colors' && req.method === 'GET') {
+      // Behind the token like the queue: it names the user's accounts.
+      return json(res, 200, { ok: true, ...accountColors() });
+    }
+
     if (url.pathname === '/pending' && req.method === 'GET') {
       const secs = Math.max(1, Math.min(PENDING_MAX_S, Number(url.searchParams.get('timeout')) || PENDING_MAX_S));
       if (queue.length) return deliver(res, queue.shift());
@@ -272,14 +301,17 @@ function main(argv) {
   const args = parseArgs(argv);
   const cmd = args._[0] || 'serve';
   if (cmd !== 'serve') {
-    console.error(`usage: node tools/bridge.js [serve] [--port ${DEFAULT_PORT}] [--host ${DEFAULT_HOST}] [--token SECRET] [--quiet]`);
+    console.error(`usage: node tools/bridge.js [serve] [--port ${DEFAULT_PORT}] [--host ${DEFAULT_HOST}] [--token SECRET] [--profile DIR] [--quiet]`);
     process.exit(2);
   }
   const port = Number(args.port || process.env.SARVA_BRIDGE_PORT || DEFAULT_PORT);
   const host = args.host || DEFAULT_HOST;
   const token = args.token || process.env.SARVA_BRIDGE_TOKEN || '';
+  // Only needed when the profile autodetection picks the wrong one (several
+  // profiles, or an install under a path the list does not know).
+  const profile = args.profile || process.env.SARVA_PROFILE || '';
   const log = args.quiet ? () => {} : (line) => console.log(`[bridge] ${line}`);
-  const { server } = createServer({ token, log });
+  const { server } = createServer({ token, log, profile });
   server.listen(port, host, () => {
     console.log(`[bridge] listening on http://${host}:${port}${token ? ' (token required)' : ''}`);
     console.log('[bridge] clickable links: http://%s:%d/open?account=<account>&message_id=<message-id>', host, port);
