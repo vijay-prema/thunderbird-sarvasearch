@@ -25,6 +25,7 @@
       "lib/http.js",
       "lib/settings.js",
       "lib/text.js",
+      "lib/notify.js",
       "lib/pause.js",
       "lib/qdrant.js",
       "lib/ollama.js",

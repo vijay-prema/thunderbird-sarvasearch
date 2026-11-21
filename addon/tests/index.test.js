@@ -11,7 +11,7 @@ loadLib('text');
 
 function setup({ qdrantOpts = {}, ollamaOpts = {} } = {}) {
   installMessenger();
-  loadLib('index');
+  loadLib('notify', 'index');
   const qdrant = fakeQdrant(qdrantOpts);
   const ollama = fakeOllama(ollamaOpts);
   globalThis.SarvaQdrant = qdrant;

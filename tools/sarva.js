@@ -9,6 +9,7 @@
 //
 //   sarva search "acme invoice" --limit 5
 //   sarva search "power bill" --from example-powerco --after 2026-01-01 --latest
+//   sarva search "invoice" --notifications only        (noreply@/alerts@/bounces@ …)
 //   sarva show --account account2 --message-id 9F2C41A7-...@example.com
 //   sarva open --account account2 --message-id 9F2C41A7-...      (opens in Thunderbird)
 //   sarva url --account account2 --message-id 9F2C41A7-...       (clickable link only)
@@ -130,6 +131,10 @@ function usage() {
       --account ID                     restrict to one Thunderbird account id
       --from TEXT                      sender filter (token match, e.g. "acme")
       --to TEXT                        recipient filter
+      --notifications only|exclude     keep only notification senders (noreply@,
+                                       notifications@, bounces@ …) or drop them
+      --attachments only|exclude       keep only messages carrying attachments,
+                                       or drop them
       --after YYYY-MM-DD               inclusive lower bound on the Date header
       --before YYYY-MM-DD              inclusive upper bound
       --latest                         keep the matched set, order newest first
@@ -181,6 +186,14 @@ async function cmdSearch(rt, args) {
   const f = args.flags;
   const mode = f.mode || undefined;
   if (mode && !MODES.has(mode)) throw new Error(`--mode must be one of ${[...MODES].join(', ')}`);
+  const notifications = f.notifications || undefined;
+  if (notifications && notifications !== 'only' && notifications !== 'exclude') {
+    throw new Error('--notifications must be only or exclude');
+  }
+  const attachments = f.attachments || undefined;
+  if (attachments && attachments !== 'only' && attachments !== 'exclude') {
+    throw new Error('--attachments must be only or exclude');
+  }
 
   const settings = await rt.SarvaSettings.get();
   const req = {
@@ -191,6 +204,8 @@ async function cmdSearch(rt, args) {
     account: f.account || undefined,
     from: f.from || undefined,
     to: f.to || undefined,
+    notifications,
+    attachments,
     after: f.after || undefined,
     before: f.before || undefined,
     settings,
@@ -227,6 +242,8 @@ async function cmdSearch(rt, args) {
     mode: out.mode,
     mode_used: out.mode_used,
     latest: out.latest,
+    notifications: out.notifications,
+    attachments: out.attachments,
     engines: out.engines,
     count: results.length,
     bridge: { running: bridge.running, started: bridge.started, url: bridge.base, clients: bridge.clients || 0 },
@@ -244,8 +261,14 @@ async function cmdSearch(rt, args) {
     process.stderr.write(`(bridge daemon not running: ${bridge.error || 'unknown'} — links will not open)\n`);
   }
   const semNote = out.engines.semantic.available ? `sem ${out.engines.semantic.candidates}` : 'sem unavailable';
+  const notes = [];
+  if (out.notifications === 'only') notes.push('notifications only');
+  else if (out.notifications === 'exclude') notes.push('notifications hidden');
+  if (out.attachments === 'only') notes.push('with attachments');
+  else if (out.attachments === 'exclude') notes.push('without attachments');
+  const notifyNote = notes.length ? ` · ${notes.join(' · ')}` : '';
   console.log(
-    `\nSearch “${out.query}”  ·  ${out.mode_used}${out.latest ? ' · latest' : ''}  ·  ` +
+    `\nSearch “${out.query}”  ·  ${out.mode_used}${out.latest ? ' · latest' : ''}${notifyNote}  ·  ` +
       `${results.length} result${results.length === 1 ? '' : 's'}  (${semNote} · kw ${out.engines.keyword.candidates})\n`
   );
   if (!results.length) {

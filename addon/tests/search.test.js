@@ -134,6 +134,46 @@ test('filters become a Qdrant filter with range and text matches', () => {
   assert.strictEqual(range.lt, new Date(2026, 1, 2).getTime());
 });
 
+test('the attachment filter is an emptiness test on the stored list', () => {
+  const build = globalThis.SarvaSearch.buildFilter;
+
+  // "Has attachments" is the negation of empty, so a message with no such field
+  // counts as having none; "without" is the plain emptiness condition.
+  assert.deepStrictEqual(build({ attachments: 'only' }), {
+    must_not: [{ is_empty: { key: 'attachments' } }],
+  });
+  assert.deepStrictEqual(build({ attachments: 'exclude' }), {
+    must: [{ is_empty: { key: 'attachments' } }],
+  });
+
+  // The tri-state filters compose: the combobox offers one at a time, the CLI
+  // may ask for both.
+  assert.deepStrictEqual(build({ notifications: 'only', attachments: 'only' }), {
+    must: [{ key: 'notification', match: { value: true } }],
+    must_not: [{ is_empty: { key: 'attachments' } }],
+  });
+});
+
+test('search echoes the attachment mode and filters every engine on it', async () => {
+  const { qdrant } = setup({ hitsByField: { subject: [hit('a', 9)] } });
+  const seen = [];
+  const inner = qdrant.query;
+  qdrant.query = (body) => {
+    seen.push(body.filter);
+    return inner(body);
+  };
+
+  const res = await globalThis.SarvaSearch.search({ query: 'x', mode: 'keyword', limit: 5, attachments: 'only' });
+  assert.strictEqual(res.attachments, 'only');
+  assert.ok(seen.length, 'the keyword engines were queried');
+  for (const filter of seen) {
+    assert.deepStrictEqual(filter.must_not, [{ is_empty: { key: 'attachments' } }]);
+  }
+
+  const off = await globalThis.SarvaSearch.search({ query: 'x', mode: 'keyword', limit: 5 });
+  assert.strictEqual(off.attachments, 'off', 'no filter unless asked for');
+});
+
 test('latest orders the relevant candidates newest first', async () => {
   // Keyword order is a, b, c, d; by date the newest is c, then a, d, b.
   const dates = { a: '2026-03-02', b: '2026-01-10', c: '2026-03-04', d: '2026-02-01' };

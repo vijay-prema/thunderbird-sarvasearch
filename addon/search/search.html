@@ -43,6 +43,12 @@
         <button data-mode="keyword" class="mode-btn" title="Match words and prefixes (BM25, works without Ollama)">Keyword</button>
       </div>
       <input type="text" id="from-filter" placeholder="from: sender contains" title="Sender contains">
+      <select id="notify-filter" title="Filter by message type: notification senders (noreply@, no-reply@, notifications@, bounces@ …) decided from the sender address, or messages carrying attachments">
+        <option value="">Any message type</option>
+        <option value="only">Notifications only</option>
+        <option value="exclude">Exclude notifications</option>
+        <option value="attachments">Emails with attachments</option>
+      </select>
       <select id="range-preset" title="Quick date range (fills the dates on the right) · Latest keeps every date and ranks the newest matches first">
         <option value="any">Any time</option>
         <option value="latest">Latest</option>
@@ -108,6 +114,7 @@
   <script src="../lib/settings.js"></script>
   <script src="../lib/accountcolors.js"></script>
   <script src="../lib/text.js"></script>
+  <script src="../lib/notify.js"></script>
   <script src="../lib/qdrant.js"></script>
   <script src="../lib/ollama.js"></script>
   <script src="../lib/index.js"></script>

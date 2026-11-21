@@ -349,6 +349,20 @@
     await SarvaSettings.ensure();
   }
 
+  // Payload migrations (a field added after an index already exists) run
+  // before the first search of the session can rely on them. They are cheap —
+  // payload reads and writes only — but they must not stop the add-on working
+  // if they fail: the next startup tries again.
+  async function migratePayloads() {
+    try {
+      const r = await SarvaIndex.runMigrations();
+      const updated = r && r['notification-flag'] && r['notification-flag'].updated;
+      if (updated) console.info(`[SarvaSearch] backfilled the notification flag on ${updated} message(s)`);
+    } catch (e) {
+      console.warn('[SarvaSearch] payload migration skipped:', e.message);
+    }
+  }
+
   // First run (or an empty index): a full build; otherwise just catch up.
   // If Qdrant is unreachable, do nothing — the user will see it in the search
   // page and can hit Rebuild once it is up.
@@ -358,6 +372,7 @@
       if (!stats || !stats.total_emails) {
         fullBuild();
       } else {
+        await migratePayloads();
         catchUp();
       }
     } catch (e) {
@@ -377,6 +392,7 @@
   messenger.runtime.onStartup.addListener(async () => {
     await ensureSpaceRegistered();
     await ensureAlarm();
+    await migratePayloads();
     catchUp();
   });
 

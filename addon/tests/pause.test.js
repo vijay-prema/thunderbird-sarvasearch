@@ -181,7 +181,7 @@ function setup(mailboxOpts) {
   const box = fakeMailbox(mailboxOpts);
   // Fresh modules per test: the pause gate is module state, and a leaked
   // waiter from an earlier test would make the next one look stuck.
-  loadLib('text', 'pause', 'index');
+  loadLib('text', 'notify', 'pause', 'index');
   loadIngest('extract', 'dockey', 'reader', 'events');
   const qdrant = fakeQdrant();
   const ollama = fakeOllama();

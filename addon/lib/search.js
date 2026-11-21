@@ -24,6 +24,12 @@
   const VALID_MODES = ['hybrid', 'semantic', 'keyword'];
   const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
+  // A tri-state filter (notifications, attachments): 'only' keeps the mail that
+  // matches, 'exclude' drops it, anything else is no filter at all.
+  function triState(value) {
+    return value === 'only' || value === 'exclude' ? value : 'off';
+  }
+
   class SemanticUnavailable extends Error {}
 
   // ISO date (whole local day) or datetime -> epoch ms.
@@ -89,20 +95,36 @@
     return `${payload.account || ''}\u0000${payload.message_id || ''}`;
   }
 
-  function buildFilter({ account, from, to, after, before }) {
+  function buildFilter({ account, from, to, after, before, notifications, attachments }) {
     const must = [];
+    const must_not = [];
     if (account) must.push({ key: 'account', match: { value: account } });
     // MatchText on the text-indexed sender/recipient: token-based, so
     // "acme" and "priya@acme-plumbing" both hit, without a full scan.
     if (from) must.push({ key: 'from', match: { text: from } });
     if (to) must.push({ key: 'to', match: { text: to } });
+    // Notifications read the stored sender-derived flag, never the from text:
+    // "no-reply@" tokenizes to "reply", which would match the wrong mail.
+    // Excluding is `must_not` on true rather than `must` on false, so points
+    // indexed before the flag existed count as non-notifications instead of
+    // dropping out of every filtered search.
+    if (notifications === 'only') must.push({ key: 'notification', match: { value: true } });
+    else if (notifications === 'exclude') must_not.push({ key: 'notification', match: { value: true } });
+    // Attachments are already a list on the point, so this is Qdrant's own
+    // emptiness test — no derived flag and nothing to backfill. "Only" is the
+    // negation of empty, so a message with no such field counts as having none.
+    if (attachments === 'only') must_not.push({ is_empty: { key: 'attachments' } });
+    else if (attachments === 'exclude') must.push({ is_empty: { key: 'attachments' } });
     const range = {};
     const afterMs = parseBound(after, false);
     const beforeMs = parseBound(before, true);
     if (afterMs != null) range.gte = afterMs;
     if (beforeMs != null) range.lt = beforeMs;
     if (Object.keys(range).length) must.push({ key: 'date_ms', range });
-    return must.length ? { must } : undefined;
+    const filter = {};
+    if (must.length) filter.must = must;
+    if (must_not.length) filter.must_not = must_not;
+    return Object.keys(filter).length ? filter : undefined;
   }
 
   async function textHits(query, field, filter, limit) {
@@ -190,28 +212,35 @@
     return out;
   }
 
-  function emptyResult(query, mode, latest) {
+  function emptyResult(query, mode, latest, notifications, attachments) {
     return {
       query,
       mode,
       mode_used: mode,
       latest: !!latest,
+      notifications,
+      attachments,
       results: [],
       engines: { semantic: { available: true, candidates: 0 }, keyword: { candidates: 0 } },
     };
   }
 
-  // search({query, mode, latest, limit, account, from, to, after, before}) ->
-  // the shape the result cards and the status line read.
+  // search({query, mode, latest, limit, account, from, to, after, before,
+  //         notifications, attachments}) ->
+  // the shape the result cards and the status line read. Both tri-state fields
+  // are 'only' | 'exclude' | 'off' (the default), and they compose: the page
+  // offers one at a time, the CLI can ask for both.
   async function search(req) {
     const s = req.settings || (await SarvaSettings.get());
     const mode = VALID_MODES.includes(req.mode) ? req.mode : s.mode || 'hybrid';
     const latest = !!req.latest;
+    const notifications = triState(req.notifications);
+    const attachments = triState(req.attachments);
     const query = String(req.query || '').trim();
     const limit = Math.max(1, Math.min(100, req.limit || s.limit || 20));
-    if (!query) return emptyResult(query, mode, latest);
+    if (!query) return emptyResult(query, mode, latest, notifications, attachments);
 
-    const filter = buildFilter(req);
+    const filter = buildFilter({ ...req, notifications, attachments });
     const candidates = Math.min(100, limit * Math.max(1, s.candidatesMultiplier || 3));
 
     // The collection is created on first use. Keyword-only search skips this:
@@ -283,6 +312,8 @@
       mode,
       mode_used: modeUsed,
       latest,
+      notifications,
+      attachments,
       results,
       engines: {
         semantic: { available: semanticAvailable, candidates: semanticHits.length },

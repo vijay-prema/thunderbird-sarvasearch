@@ -55,6 +55,9 @@
       body: doc.body || '',
       header_only: !!doc.header_only,
       encrypted: !!doc.encrypted,
+      // Derived from the sender, so the notification filter is a bool match
+      // instead of a token match on the from text (see lib/notify.js).
+      notification: SarvaNotify.isNotification(doc.from),
       numeric_id: doc.numeric_id == null ? null : doc.numeric_id,
       attachments: doc.attachments || [],
       content_hash: hash,
@@ -175,6 +178,14 @@
       if (doc.account_name && doc.account_name !== (before.account_name || '')) {
         patch(id, { account_name: doc.account_name });
       }
+      // The sender cannot have moved (it is part of the embed text, so a new
+      // From would hash differently), which means this only fires for points
+      // indexed before the flag existed: a rebuild backfills it without
+      // re-embedding anything.
+      const notification = SarvaNotify.isNotification(doc.from);
+      if (before.notification !== notification) {
+        patch(id, { notification });
+      }
       // Attachment names are not part of the embed text, so a re-read that
       // finally sees them backfills without re-embedding. A non-empty list came
       // from a parsed MIME tree and is authoritative; an empty one is only
@@ -248,6 +259,74 @@
 
     if (result.embed_failed) await saveFailures(failures);
     return result;
+  }
+
+  // ---- one-time payload migrations ----
+  // A payload field added after an index already exists is derivable from what
+  // is stored there, so it is backfilled directly: no mail is re-read and
+  // nothing is re-embedded. The run is recorded in storage, so it happens once
+  // per index (Clear forgets the record along with everything else).
+  const MIGRATIONS_KEY = 'sarvasearch_payload_migrations';
+
+  // The notification flag (lib/notify.js) is a function of the stored sender.
+  async function backfillNotifications() {
+    const result = { scanned: 0, updated: 0 };
+    let offset = null;
+    for (;;) {
+      const body = {
+        limit: SCROLL_BATCH,
+        with_payload: ['message_id', 'from', 'notification'],
+        with_vector: false,
+      };
+      if (offset != null) body.offset = offset;
+      const res = await SarvaQdrant.scroll(body);
+      const page = (res && res.result) || {};
+      // Grouped by the value each point needs, so a page costs at most two
+      // payload writes rather than one per point.
+      const patches = new Map();
+      for (const p of page.points || []) {
+        const pl = p.payload || {};
+        if (!pl.message_id) continue;
+        result.scanned += 1;
+        const flag = SarvaNotify.isNotification(pl.from);
+        if (pl.notification === flag) continue;
+        const sig = String(flag);
+        const entry = patches.get(sig) || { payload: { notification: flag }, ids: [] };
+        entry.ids.push(p.id);
+        patches.set(sig, entry);
+      }
+      for (const { payload, ids } of patches.values()) {
+        await SarvaQdrant.setPayload(ids, payload);
+        result.updated += ids.length;
+      }
+      offset = page.next_page_offset;
+      if (!page.points || page.points.length === 0 || offset == null) break;
+    }
+    return result;
+  }
+
+  const MIGRATIONS = { 'notification-flag': backfillNotifications };
+  // A rule change (lib/notify.js LOCAL_PATTERNS) renames the key — e.g.
+  // 'notification-flag-2' — because the backfill only rewrites points whose
+  // stored value disagrees, and indexes already marked done would otherwise
+  // keep the old judgement.
+
+  // Run whatever this index still owes. Returns null when there is nothing to
+  // do (no collection yet, or everything already applied).
+  async function runMigrations() {
+    if (!(await SarvaQdrant.exists())) return null;
+    const stored = await messenger.storage.local.get(MIGRATIONS_KEY);
+    const done = new Set((stored && stored[MIGRATIONS_KEY]) || []);
+    const pending = Object.keys(MIGRATIONS).filter((name) => !done.has(name));
+    if (!pending.length) return null;
+    const out = {};
+    for (const name of pending) {
+      out[name] = await MIGRATIONS[name]();
+      done.add(name);
+      // Recorded per migration: a later one failing must not repeat this one.
+      await messenger.storage.local.set({ [MIGRATIONS_KEY]: [...done] });
+    }
+    return out;
   }
 
   // ---- reads ----
@@ -421,6 +500,10 @@
     await SarvaQdrant.ensure(dims);
     ready = true;
     await messenger.storage.local.remove(FAIL_KEY);
+    // A cleared index is rebuilt from scratch, so the one-time migrations owe
+    // it nothing — forget that they ran, and the next startup applies them to
+    // whatever the rebuild wrote.
+    await messenger.storage.local.remove(MIGRATIONS_KEY);
     return true;
   }
 
@@ -436,6 +519,7 @@
     clear,
     ensureReady,
     invalidate,
+    runMigrations,
     keyOf,
   };
 })();

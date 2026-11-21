@@ -1,7 +1,7 @@
 # SarvaSearch for Thunderbird Email
 
 *Sarva* is Sanskrit for "all" (or "every") — Instant and awesome fuzzy meaning or keyword search, across all of your
-email accounts, with simple filtering by dates and `from:` field.
+email accounts, with simple filtering by dates, `from:` field and sender type (human or notification).
 
 Fast, local, private, and no additional login required.
 
@@ -156,14 +156,14 @@ until it finishes.
 | vector | dense, Cosine, sized by the embedding model |
 | `account` | keyword index (account filter) |
 | `date_ms` | integer index (date range filter) |
-| `header_only`, `encrypted` | bool indexes (stats) |
+| `header_only`, `encrypted`, `notification` | bool indexes (stats, notification filter) |
 | `subject`, `from`, `to`, `body` | text indexes, `prefix` tokenizer, **BM25 scoring** |
 
 The `prefix` tokenizer is what keeps "invo" → "invoice" working: every token prefix is
 indexed, at roughly 1.5–2× the size of a word-tokenized index.
 
 Payload: `message_id, account, account_name, subject, from, to, date, date_ms,
-folders, snippet, body, header_only, encrypted, numeric_id, attachments,
+folders, snippet, body, header_only, encrypted, notification, numeric_id, attachments,
 content_hash, indexed_at`.
 
 ## Search modes & filters
@@ -174,7 +174,9 @@ content_hash, indexed_at`.
 | Semantic | Ollama embeddings + Qdrant cosine | meaning over exact words |
 | Keyword | BM25 per field, weighted (subject 8 : from 4 : to 2 : body 1) | prefix matching; no Ollama needed |
 
-Filters on any mode: account dropdown, sender-contains, a quick date range
+Filters on any mode: account dropdown, sender-contains, message type (*Any message
+type, Notifications only, Exclude notifications, Emails with attachments*), a quick
+date range
 (*Any time, Last 7/30/60 days, This week, This month, Last month, This year*, or
 custom) and an after/before date range. The quick ranges just fill the two date
 inputs, so you can see and adjust the exact window they applied; editing a date
@@ -188,6 +190,38 @@ relevance order. Cards still show their `sem`/`kw` rank, so a message that place
 poorly on relevance is visibly just that. If Ollama is down, hybrid silently
 degrades to keyword-only and says so in the status line.
 
+### Notifications and attachments
+
+The **message type** combobox narrows a search to one kind of mail: *Any message
+type* (the default — no filter), *Notifications only*, *Exclude notifications*, or
+*Emails with attachments*. One choice at a time: picking a notification mode
+clears the attachment filter and vice versa. The CLI keeps the two independent
+(`--notifications` and `--attachments`), so an agent can ask for notification mail
+that carries attachments.
+
+A sender is a notification when its **address** says so —
+`noreply@`, `no-reply@`, `do-not-reply@`, `notifications@` (anywhere in the local
+part), `mailer-daemon@`, `postmaster@`, `bounces+…@`, `auto-reply@`,
+`automated@`, `alerts@`, `newsletter@`, `digest@`, `updates@`. `info@`,
+`support@`, `sales@` and `news@` are deliberately **not** notifications: they are
+monitored mailboxes or marketing, and the display name is never considered — a
+person whose name is "Notifications Team" is still a person.
+
+That judgement is made once, from the sender, and stored as the `notification`
+bool on the point (`lib/notify.js`), because Qdrant's text index tokenizes
+`no-reply@example.com` into "no" + "reply" and drops "no" (2-char minimum) — a
+query-side text match would land on "reply". Indexes built before the flag
+existed are backfilled from the already-stored `from` by a payload-only migration
+on the next startup: no mail is re-read and nothing is re-embedded. Excluding
+filters on `notification: true` via `must_not`, so points that still lack the flag
+count as non-notifications instead of vanishing from every filtered search.
+
+Attachments need no flag: the names are already on the point, so *Emails with
+attachments* is Qdrant's own emptiness test (`must_not: is_empty attachments`),
+and excluding is the same test negated. A message with no such field counts as
+having none — which is what a message indexed before attachment names were
+recorded looks like either way, until a rebuild backfills them.
+
 Result cards also list the message's **attachment file names** (the first three, then
 `+N more`, with the rest in the tooltip). Clicking a chip opens **that attachment on its
 own** — the system handler for the file type, or Thunderbird's own viewer for a PDF —
@@ -198,9 +232,14 @@ gone since the message was indexed the card says so instead of opening something
 Names are captured at index time and are not part of the embedded text, so a rebuild
 backfills (and corrects) them without re-embedding anything.
 
-Text in a card stays selectable: a click that ends a drag, or that lands with a live
-selection, selects instead of opening — the card, its preview links and its attachment
-chips all ignore a selection gesture.
+Text in a card stays selectable: a click that lands with a live selection inside the
+card selects instead of opening, and the card, its preview links and its attachment
+chips all honour that. Nothing else counts as a drag — a click that drifted a few
+pixels used to be swallowed, which looks exactly like a dead control, so the
+selection itself is the only signal. A link or attachment that cannot open now says
+why (a toast, plus the Error Console) instead of failing silently, and a stalled
+attachment open gives up after 15 seconds and releases the chip rather than leaving
+it permanently unclickable.
 
 ### Which account is this?
 
@@ -232,6 +271,9 @@ The index is the whole store, so anything that can speak Qdrant can search it �
 ```bash
 node tools/sarva.js search "acme invoice" --limit 5
 node tools/sarva.js search "power bill" --from example-powerco --after 2026-01-01 --latest
+node tools/sarva.js search "invoice" --notifications only        # alert/statement mail only
+node tools/sarva.js search "invoice" --notifications exclude     # people only
+node tools/sarva.js search "invoice" --attachments only          # mail carrying files
 node tools/sarva.js search "rates notice" --json          # machine-readable, for agents
 node tools/sarva.js show  --account account2 --message-id abc@example.com
 node tools/sarva.js stats | accounts | doctor

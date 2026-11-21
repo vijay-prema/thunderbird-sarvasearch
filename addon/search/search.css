@@ -605,7 +605,8 @@ main {
   gap: 8px;
 }
 
-#range-preset {
+#range-preset,
+#notify-filter {
   padding: 6px 8px;
   font-size: 12px;
   border: 1px solid var(--border);
@@ -616,8 +617,17 @@ main {
   cursor: pointer;
 }
 
-#range-preset:focus {
+#range-preset:focus,
+#notify-filter:focus {
   border-color: var(--accent);
+}
+
+/* A notification mode other than off is a live filter — say so at a glance.
+   The class is set from search.js (the value attribute never changes). */
+#notify-filter.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 500;
 }
 
 /* Attachment names on result cards */

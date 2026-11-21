@@ -13,6 +13,17 @@ const MODE_LABEL = {
   keyword: "Keyword",
 };
 
+// The message-type combobox is one choice at a time, so each position sets at
+// most one of the two filters the search understands. The library keeps them
+// separate (the CLI can ask for both); the combobox deliberately does not
+// combine them, because a picker that silently keeps a filter from an earlier
+// choice is worse than one that replaces it.
+const MAIL_TYPE_FILTERS = {
+  only: { notifications: "only" },
+  exclude: { notifications: "exclude" },
+  attachments: { attachments: "only" },
+};
+
 // Settings live in lib/settings.js; these are the only two accessors the page
 // needs, kept as thin wrappers so the rest of the file reads unchanged.
 function getSettings() {
@@ -42,6 +53,9 @@ async function doSearch() {
   const mode = await currentMode();
   const account = document.getElementById("account-filter").value || undefined;
   const from = document.getElementById("from-filter").value.trim() || undefined;
+  // '' is "Any message type"; the other positions are the notification modes
+  // and the attachment filter (see MAIL_TYPE_FILTERS).
+  const mailType = MAIL_TYPE_FILTERS[document.getElementById("notify-filter").value] || {};
   const after = document.getElementById("after-filter").value || undefined;
   const before = document.getElementById("before-filter").value || undefined;
   // "Latest" lives in the same combobox but is a ranking choice, not a window:
@@ -67,6 +81,8 @@ async function doSearch() {
       after,
       before,
       latest,
+      notifications: mailType.notifications,
+      attachments: mailType.attachments,
       settings: s,
     });
 
@@ -98,6 +114,10 @@ function statusLine(data, elapsed, count) {
     line += ` (semantic ${sem.candidates}, keyword ${kw.candidates} candidates)`;
   }
   if (data.latest) line += " · newest first";
+  if (data.notifications === "only") line += " · notifications only";
+  else if (data.notifications === "exclude") line += " · notifications hidden";
+  if (data.attachments === "only") line += " · with attachments";
+  else if (data.attachments === "exclude") line += " · without attachments";
   return line;
 }
 
@@ -115,11 +135,8 @@ function scoreDisplay(result, modeUsed) {
 function createResultCard(result, modeUsed) {
   const card = document.createElement("div");
   card.className = "result-card";
-  card.addEventListener("mousedown", (e) => (pressAt = { x: e.clientX, y: e.clientY }));
-  card.addEventListener("click", (e) => {
-    const press = pressAt;
-    pressAt = null;
-    if (endsSelection(e, card, press)) return;
+  card.addEventListener("click", () => {
+    if (endsSelection(card)) return;
     openEmail(result);
   });
 
@@ -160,16 +177,18 @@ function createResultCard(result, modeUsed) {
 
 // --- Selecting text vs opening something ---
 
-// The mousedown a click ends with (see createResultCard): if the pointer moved,
-// the gesture was a text selection, not a click.
-let pressAt = null;
-
-// A click that ends a drag, or that lands with a live selection inside `el`, is
-// the end of a selection gesture — it must not open anything. The check is
-// scoped to `el` so a selection in another card never blocks this one.
-function endsSelection(e, el, press) {
-  if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) return true;
-  return selectionInside(el);
+// A click that lands with a live selection inside `el` is the end of a
+// selection gesture — it must not open anything. The selection itself is the
+// signal. A pointer-distance test used to run alongside it, and it was wrong in
+// the way that matters: an ordinary click that drifted a few pixels (a trackpad
+// click, a hand that moved between press and release) was silently treated as a
+// drag, so the link, the chip and the card all did nothing and said nothing.
+// The check is scoped to `el` so a selection in another card never blocks this
+// one, and an ignored click is logged rather than vanishing.
+function endsSelection(el) {
+  if (!selectionInside(el)) return false;
+  console.info("[SarvaSearch] click ignored: a text selection covers this element");
+  return true;
 }
 
 function selectionInside(el) {
@@ -226,25 +245,21 @@ function linkNode(url, result, cut, offset) {
     : `Open in your browser: ${hrefFor(url)}`;
   // The card under the link opens the message: stop the click there, in every
   // button, or a link opens a message and a browser tab.
-  let press = null;
-  a.addEventListener("mousedown", (e) => (press = { x: e.clientX, y: e.clientY }));
-  const open = (e) => {
-    const started = press;
-    press = null;
+  const open = () => {
     // Dragging across the address is a selection, not a click on the link.
-    if (endsSelection(e, a.closest(".result-card") || a, started)) return;
+    if (endsSelection(a.closest(".result-card") || a)) return;
     resolveAndOpen(a, result);
   };
   a.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    open(e);
+    open();
   });
   a.addEventListener("auxclick", (e) => {
     if (e.button !== 1) return;
     e.preventDefault();
     e.stopPropagation();
-    open(e);
+    open();
   });
   // Hover is intent: complete the address before the click, so a truncated URL
   // opens the right page with no wait.
@@ -326,12 +341,31 @@ async function resolveAndOpen(a, result) {
   }
 }
 
+// Opening a link must never fail silently: a swallowed error here is
+// indistinguishable from a dead control, and that is exactly how this read when
+// it broke. `openDefaultBrowser` is synchronous inside Thunderbird (it hands the
+// URL to the OS), so a rejection has to be caught on the promise it may return,
+// and a missing API is reported rather than replaced with a window.open() that
+// fires after an await — no user gesture is left by then, so the popup is
+// blocked without a word.
 function openInBrowser(url) {
+  const open = messenger.windows && messenger.windows.openDefaultBrowser;
+  if (typeof open !== "function") {
+    console.error("[SarvaSearch] messenger.windows.openDefaultBrowser is unavailable");
+    showToast(`Could not open ${url} — this Thunderbird has no openDefaultBrowser API.`);
+    return;
+  }
   try {
-    const opening = messenger.windows.openDefaultBrowser(url);
-    if (opening && typeof opening.catch === "function") opening.catch(() => {});
+    const opening = open.call(messenger.windows, url);
+    if (opening && typeof opening.catch === "function") {
+      opening.catch((e) => {
+        console.error("[SarvaSearch] openDefaultBrowser failed:", e);
+        showToast(`Could not open the link in your browser: ${(e && e.message) || e}`);
+      });
+    }
   } catch (e) {
-    window.open(url, "_blank", "noopener");
+    console.error("[SarvaSearch] openDefaultBrowser threw:", e);
+    showToast(`Could not open the link in your browser: ${e.message || e}`);
   }
 }
 
@@ -373,17 +407,13 @@ function attachmentsNode(result) {
     chip.className = "badge badge-attachment";
     chip.textContent = name;
     chip.title = `Open ${name}`;
-    let press = null;
-    chip.addEventListener("mousedown", (e) => (press = { x: e.clientX, y: e.clientY }));
     chip.addEventListener("click", (e) => {
       // Not the card: opening the message instead of the attachment is exactly
       // what this control exists to avoid. A drag across the name is a
       // selection, though, and must not open the attachment either.
       e.preventDefault();
       e.stopPropagation();
-      const started = press;
-      press = null;
-      if (endsSelection(e, chip, started)) return;
+      if (endsSelection(chip)) return;
       openAttachment(result, name, index, chip);
     });
     row.appendChild(chip);
@@ -400,21 +430,40 @@ function attachmentsNode(result) {
   return row;
 }
 
+// Thunderbird's own opener can stall — a save dialog waiting behind the window,
+// or an API that never answers — and a stalled call used to hold the chip in
+// "pending" for the life of the page, so every later click on it was silently
+// dropped. Bound it, report it, and always release the chip.
+const ATTACH_TIMEOUT_MS = 15000;
+
+function withTimeout(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 async function openAttachment(result, name, index, chip) {
   if (chip.classList.contains("pending")) return;
   chip.classList.add("pending");
   try {
-    const outcome = await SarvaAttach.open(
-      {
-        headerMessageId: (result.message_id || "").replace(/^<|>$/g, ""),
-        numeric_id: result.numeric_id != null ? Number(result.numeric_id) : null,
-        account_id: result.account,
-      },
-      { name, index }
+    const outcome = await withTimeout(
+      SarvaAttach.open(
+        {
+          headerMessageId: (result.message_id || "").replace(/^<|>$/g, ""),
+          numeric_id: result.numeric_id != null ? Number(result.numeric_id) : null,
+          account_id: result.account,
+        },
+        { name, index }
+      ),
+      ATTACH_TIMEOUT_MS,
+      { ok: false, reason: "timeout" }
     );
     if (outcome.ok) return;
+    console.error("[SarvaSearch] could not open attachment", name, outcome.reason, outcome.error || "");
     showToast(attachmentError(name, outcome));
   } catch (e) {
+    console.error("[SarvaSearch] opening the attachment threw:", e);
     showToast(`Could not open “${name}”: ${e.message}`);
   } finally {
     chip.classList.remove("pending");
@@ -427,6 +476,9 @@ function attachmentError(name, outcome) {
   }
   if (outcome.reason === "attachment-missing") {
     return `“${name}” is no longer attached to this message — open the email to see what is.`;
+  }
+  if (outcome.reason === "timeout") {
+    return `Thunderbird did not answer when opening “${name}” — try again, or open the email and click the attachment there.`;
   }
   return `Could not open “${name}”: ${outcome.error || outcome.reason}`;
 }
@@ -520,6 +572,14 @@ function markRangeCustom() {
 
 function searchIfQuery() {
   if (document.getElementById("search-input").value.trim()) doSearch();
+}
+
+// The message-type combobox looks like a filter only while it is doing
+// something: "Any message type" is the plain control, any other position gets
+// the accent.
+function syncMailFilter(select) {
+  const el = select || document.getElementById("notify-filter");
+  el.classList.toggle("active", !!el.value);
 }
 
 // --- Mode toggle ---
@@ -889,6 +949,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("account-filter").addEventListener("change", () => {
     if (document.getElementById("search-input").value.trim()) doSearch();
   });
+  document.getElementById("notify-filter").addEventListener("change", (e) => {
+    syncMailFilter(e.target);
+    searchIfQuery();
+  });
   document.getElementById("range-preset").addEventListener("change", (e) => {
     const applied = applyDatePreset(e.target.value);
     if (!applied) {
@@ -941,6 +1005,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("pause-btn").addEventListener("click", togglePause);
 
   await initModeToggle();
+  syncMailFilter();
   await loadAccounts();
   await loadAccountFilter();
   loadVersion();

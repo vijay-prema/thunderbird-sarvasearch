@@ -8,7 +8,7 @@
 // Collection layout (see ensure()):
 //   vector       unnamed, Cosine, sized by the embedding model
 //   payload      account (keyword), date_ms (integer),
-//                header_only / encrypted (bool),
+//                header_only / encrypted / notification (bool),
 //                subject / from / to / body (text, prefix tokenizer, BM25)
 (function () {
   const TEXT_FIELDS = ['subject', 'from', 'to', 'body'];
@@ -85,6 +85,7 @@
       ['date_ms', { type: 'integer' }],
       ['header_only', { type: 'bool' }],
       ['encrypted', { type: 'bool' }],
+      ['notification', { type: 'bool' }],
     ];
     for (const field of TEXT_FIELDS) {
       wanted.push([
